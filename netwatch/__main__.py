@@ -22,6 +22,7 @@ from .dll_inspector import DLLInspector
 from .investigator import ProcessInvestigator
 from .monitor import TrafficMonitor
 from .reporter import Reporter
+from .threat_intel import ThreatIntelManager
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -80,6 +81,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Scan a specific PID for injected DLLs",
     )
     p.add_argument(
+        "--update-feeds",
+        action="store_true",
+        help="Download / update threat intelligence feeds from abuse.ch",
+    )
+    p.add_argument(
+        "--feed-status",
+        action="store_true",
+        help="Show status of threat intelligence feeds",
+    )
+    p.add_argument(
+        "--api-key",
+        type=str,
+        default=None,
+        metavar="KEY",
+        help="abuse.ch API key for MalwareBazaar hash lookups",
+    )
+    p.add_argument(
+        "--hash-lookup",
+        type=str,
+        default=None,
+        metavar="SHA256",
+        help="Look up a SHA256 hash in MalwareBazaar (requires --api-key)",
+    )
+    p.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -88,13 +113,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 BANNER = r"""
-  _   _      _ __        __    _       _
- | \ | | ___| |\ \      / /_ _| |_ ___| |__
- |  \| |/ _ \ __\ \ /\ / / _` | __/ __| '_ \
- | |\  |  __/ |_ \ V  V / (_| | || (__| | | |
- |_| \_|\___|\__| \_/\_/ \__,_|\__\___|_| |_|
-
-  Network Traffic Anomaly Detector  v1.0.0
+  _   _      ___          __   _       _     
+ | \ | |    | \ \        / /  | |     | |    
+ |  \| | ___| |\ \  /\  / /_ _| |_ ___| |__  
+ | . ` |/ _ \ __\ \/  \/ / _` | __/ __| '_ \ 
+ | |\  |  __/ |_ \  /\  / (_| | || (__| | | |
+ |_| \_|\___|\__| \/  \/ \__,_|\__\___|_| |_|
+                                             
+  Network Traffic Anomaly Detector  v2.0.0
+  Threat Intelligence Enhanced
 """
 
 
@@ -109,9 +136,74 @@ def main() -> None:
 
     print(BANNER)
 
+    # ---- Initialize threat intel ----
+    threat_intel = ThreatIntelManager(api_key=args.api_key)
+
+    # ---- Feed management modes ----
+    if args.update_feeds:
+        print("  Updating threat intelligence feeds...\n")
+        statuses = threat_intel.update_feeds()
+        for name, status in statuses.items():
+            if status.error:
+                print(f"  [FAIL] {status.description}")
+                print(f"         Error: {status.error}")
+            else:
+                print(f"  [OK]   {status.description}")
+                print(f"         {status.entry_count} entries loaded")
+        print(f"\n  Feed cache: {threat_intel.cache_dir}")
+        print(f"  Total C2 IPs loaded: {len(threat_intel.c2_ips)}")
+        print(f"  Total malicious domains: {len(threat_intel.malicious_domains)}")
+        print()
+        return
+
+    if args.feed_status:
+        statuses = threat_intel.get_feed_status()
+        print("  Threat Intelligence Feed Status:\n")
+        for name, status in statuses.items():
+            updated = status.last_updated.strftime("%Y-%m-%d %H:%M UTC") if status.last_updated else "never"
+            print(f"  {name}:")
+            print(f"    {status.description}")
+            print(f"    Last updated: {updated}")
+            if status.cache_path:
+                from pathlib import Path
+                exists = "yes" if Path(status.cache_path).exists() else "no"
+                print(f"    Cache file: {status.cache_path} (exists: {exists})")
+        print(f"\n  In-memory IOCs: {len(threat_intel.c2_ips)} C2 IPs, "
+              f"{len(threat_intel.malicious_domains)} domains")
+        if threat_intel.needs_update():
+            print("  [!] Some feeds are stale or missing. Run --update-feeds to refresh.")
+        print()
+        return
+
+    if args.hash_lookup:
+        if not args.api_key and not threat_intel.api_key:
+            print("  Error: --hash-lookup requires --api-key or ABUSE_CH_API_KEY env var.\n")
+            return
+        print(f"  Looking up hash: {args.hash_lookup}\n")
+        match = threat_intel.lookup_hash_online(args.hash_lookup)
+        if match:
+            print(f"  [MATCH] {match.description}")
+            if match.malware_family:
+                info = threat_intel.get_malware_info(match.malware_family)
+                if info:
+                    print(f"  Family: {info}")
+            if match.first_seen:
+                print(f"  First seen: {match.first_seen}")
+        else:
+            print("  Hash not found in MalwareBazaar (clean or unknown).")
+        print()
+        return
+
+    # ---- Auto-load feeds silently (if cached) ----
+    if threat_intel.needs_update():
+        print("  [i] Threat intel feeds not cached. Downloading...\n")
+        threat_intel.update_feeds(quiet=True)
+        print(f"  [i] Loaded {len(threat_intel.c2_ips)} C2 IPs, "
+              f"{len(threat_intel.malicious_domains)} domains from feeds.\n")
+
     # ---- DLL scan mode ----
     if args.dll_scan or args.dll_scan_pid is not None:
-        dll_inspector = DLLInspector()
+        dll_inspector = DLLInspector(threat_intel=threat_intel)
         reporter = Reporter(log_file=args.log)
         if args.dll_scan_pid is not None:
             print(f"  Scanning PID {args.dll_scan_pid} for injected DLLs…\n")
@@ -140,7 +232,7 @@ def main() -> None:
 
     # ---- Monitor / snapshot mode ----
     monitor = TrafficMonitor(poll_interval=args.interval)
-    detector = AnomalyDetector()
+    detector = AnomalyDetector(threat_intel=threat_intel)
     reporter = Reporter(log_file=args.log)
     investigator = ProcessInvestigator()
 

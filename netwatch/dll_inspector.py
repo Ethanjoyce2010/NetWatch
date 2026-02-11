@@ -27,6 +27,7 @@ from typing import Optional
 import psutil
 
 from .models import Alert, Severity
+from .threat_intel import ThreatIntelManager, get_threat_intel
 
 logger = logging.getLogger("netwatch.dll_inspector")
 
@@ -186,9 +187,12 @@ class DLLScanResult:
 class DLLInspector:
     """Enumerates and analyses loaded DLLs across processes."""
 
-    def __init__(self):
+    def __init__(self, threat_intel: Optional[ThreatIntelManager] = None):
         if not _WINAPI_AVAILABLE:
             logger.warning("DLL inspection requires Windows — feature disabled.")
+        self.threat_intel = threat_intel or get_threat_intel()
+        # Merge extended definitions from threat intel
+        self._all_suspicious_dlls = KNOWN_SUSPICIOUS_DLLS | self.threat_intel.get_suspicious_dlls()
 
     # ------------------------------------------------------------------
     # Public API
@@ -330,9 +334,14 @@ class DLLInspector:
         if name == process_name:
             return []
 
-        # 1. Known malicious DLL name
-        if name in KNOWN_SUSPICIOUS_DLLS and not self._is_system_dir(directory):
-            reasons.append(f"known suspicious DLL name '{name}'")
+        # 1. Known malicious DLL name (includes threat intel extended list)
+        if name in self._all_suspicious_dlls and not self._is_system_dir(directory):
+            # Check if threat intel has more details
+            ti_match = self.threat_intel.is_known_malicious_dll(name)
+            if ti_match:
+                reasons.append(f"known malicious DLL name '{name}' ({ti_match.source})")
+            else:
+                reasons.append(f"known suspicious DLL name '{name}'")
 
         # 2. Loaded from temp / downloads / user-writable directory
         for sus_dir in SUSPICIOUS_DIRS:
@@ -349,14 +358,16 @@ class DLLInspector:
         # Skip this check for .NET managed assemblies — the CLR maps them
         # in memory and the on-disk path reported by the OS may not resolve.
         if not mod.exists_on_disk and not self._is_managed_assembly(directory, name):
-            reasons.append("module file not found on disk (possible reflective injection)")
+            # Also skip dotnet host/fxr directories
+            if "dotnet" not in directory:
+                reasons.append("module file not found on disk (possible reflective injection)")
 
-        # 5. High-entropy / random-looking filename
+        # 5. High-entropy / random-looking filename (threshold 4.1 to avoid legit long names)
         stem = Path(name).stem
-        if len(stem) >= 5 and self._filename_entropy(stem) > 3.8:
-            # Also check it's not in a system dir (many legit system DLLs have odd names)
+        if len(stem) >= 6 and self._filename_entropy(stem) > 4.1:
             if not self._is_system_dir(directory) and not directory.startswith(process_dir):
-                reasons.append(f"random-looking filename (entropy={self._filename_entropy(stem):.2f})")
+                if not self._is_app_module_dir(directory, process_dir):
+                    reasons.append(f"random-looking filename (entropy={self._filename_entropy(stem):.2f})")
 
         # 6. Loaded into a "tight" process that shouldn't have extra DLLs
         if process_name in TIGHT_PROCESSES:
@@ -371,11 +382,20 @@ class DLLInspector:
             and not directory.startswith(process_dir)
             and not reasons  # don't double-flag
         ):
-            # Only flag if it's also not a well-known runtime dir
-            if not self._is_runtime_dir(directory):
+            # Only flag if it's also not a well-known runtime or app-module dir
+            if not self._is_runtime_dir(directory) and not self._is_app_module_dir(directory, process_dir):
                 # Soft signal — only include if the name is also unusual
                 if name not in self._COMMON_RUNTIME_DLLS:
                     reasons.append(f"loaded from unrelated directory: {mod.directory}")
+
+        # 8. SHA256 hash check against threat intel (for DLLs in suspicious locations)
+        if reasons and mod.exists_on_disk:
+            hash_match = self.threat_intel.check_file_hash(mod.path)
+            if hash_match:
+                reasons.insert(0,
+                    f"HASH MATCH: {hash_match.malware_family or 'malware'} "
+                    f"({hash_match.source})"
+                )
 
         return reasons
 
@@ -393,9 +413,11 @@ class DLLInspector:
     def _severity_from_reasons(reasons: list[str]) -> Severity:
         """Pick the highest severity based on the reason strings."""
         text = " ".join(reasons).lower()
+        if "hash match" in text:
+            return Severity.CRITICAL
         if "not found on disk" in text or "reflective" in text:
             return Severity.CRITICAL
-        if "known suspicious" in text or "unexpected dll" in text:
+        if "known suspicious" in text or "known malicious" in text or "unexpected dll" in text:
             return Severity.HIGH
         if "side-load" in text or "suspicious directory" in text:
             return Severity.HIGH
@@ -416,9 +438,43 @@ class DLLInspector:
             "microsoft shared", "windows kits",
             "common files", "windowsapps",
             "microsoft sdks",
+            ".vscode", "vscode", "vs code",
+            "site-packages", "lib\\site",
+            "powertoys", "steam",
         ]
         d = directory.lower()
         return any(p in d for p in patterns)
+
+    @staticmethod
+    def _is_app_module_dir(directory: str, process_dir: str) -> bool:
+        """Check if the directory is a sub-module / plugin dir of the app.
+
+        Many apps (Discord, VS Code, Chrome, etc.) load DLLs from
+        sub-directories like `modules/`, `extensions/`, `plugins/`
+        that share a common ancestor with the process directory.
+        """
+        d = directory.lower().lstrip("\\\\?\\").rstrip("\\")
+        pd = process_dir.lower().lstrip("\\\\?\\").rstrip("\\")
+
+        # Check if they share a common root (at least 3 path components deep)
+        d_parts = d.replace("/", "\\").split("\\")
+        pd_parts = pd.replace("/", "\\").split("\\")
+        common = 0
+        for a, b in zip(d_parts, pd_parts):
+            if a == b:
+                common += 1
+            else:
+                break
+        if common >= 3:
+            return True
+
+        # Known app module sub-dir patterns
+        module_markers = [
+            "\\modules\\", "\\extensions\\", "\\plugins\\",
+            "\\resources\\", "\\addons\\", "\\components\\",
+            "\\bin\\", "\\lib\\",
+        ]
+        return any(m in d for m in module_markers) and common >= 2
 
     @staticmethod
     def _is_managed_assembly(directory: str, name: str) -> bool:

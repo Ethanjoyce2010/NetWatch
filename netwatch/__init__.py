@@ -1,7 +1,8 @@
 """
 NetWatch — Network Traffic Anomaly Detector
 Monitors live network connections, detects suspicious behavior,
-and identifies potentially malicious processes.
+identifies potentially malicious processes, and cross-references
+connections against live threat intelligence feeds.
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

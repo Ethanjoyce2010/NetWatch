@@ -1,18 +1,27 @@
 # NetWatch — Network Traffic Anomaly Detector
 
-A Python tool that monitors live network connections, detects suspicious behaviour, and narrows down potentially malicious processes.
+A Python tool that monitors live network connections, detects suspicious behaviour, cross-references against live threat intelligence feeds, and narrows down potentially malicious processes.
 
 ## Features
 
 | Capability | Details |
-|---|---|
+| --- | --- |
 | **Live monitoring** | Polls OS network connections at a configurable interval |
 | **Process mapping** | Maps every connection to its owning process (name, PID, exe, user) |
-| **9 detection rules** | Suspicious ports, unexpected network processes, high connection rates, IP/port scanning, Tor usage, DNS tunnelling indicators, external listeners, C2-style callbacks |
-| **Risk scoring** | Each process accumulates a 0–100 risk score based on triggered alerts |
-| **Deep investigation** | Drills into flagged processes — parent/child tree, open files, env vars, fileless-malware check |
+| **14 detection rules** | Suspicious ports, unexpected processes, high connection rates, IP/port scanning, Tor, DNS tunnelling, external listeners, C2 callbacks, **known C2 IPs, beaconing, process masquerading, DNS exfiltration, crypto mining** |
+| **Threat intelligence feeds** | Auto-downloads IOC feeds from abuse.ch (Feodo Tracker, SSLBL, URLhaus) — C2 IPs, malicious domains, malware URLs |
+| **MalwareBazaar integration** | Optional SHA256 hash lookups against MalwareBazaar API (free auth key) |
+| **DLL injection detection** | 8 heuristics including hash verification against threat intel |
+| **80+ known malware DLL names** | Extended definitions covering Cobalt Strike, Metasploit, Mimikatz, RATs, stealers, loaders, APT tools |
+| **30+ malware family database** | Built-in descriptions for Emotet, TrickBot, QakBot, Cobalt Strike, RedLine, Lumma, and more |
+| **Process masquerade detection** | Validates critical Windows processes run from expected directories |
+| **LOLBin detection** | Flags Living Off the Land Binaries making external connections |
+| **DGA domain detection** | Regex patterns to catch algorithmically generated domain names |
+| **Risk scoring** | Each process accumulates a 0-100 risk score based on triggered alerts |
+| **Deep investigation** | Drills into flagged processes - parent/child tree, open files, env vars, fileless-malware check |
 | **JSON alerting** | Optionally writes structured alerts to a JSON file for SIEM ingestion |
 | **Coloured output** | Severity-coded terminal output for quick triage |
+| **Interactive batch menu** | Windows batch file UI with 11 menu options |
 
 ## Requirements
 
@@ -40,7 +49,7 @@ python -m netwatch --interval 5
 # Run for 60 seconds then auto-summarise
 python -m netwatch --duration 60
 
-# Single snapshot — analyse and exit immediately
+# Single snapshot - analyse and exit immediately
 python -m netwatch --snapshot
 
 # Write alerts to a JSON log file
@@ -49,6 +58,21 @@ python -m netwatch --log alerts.json
 # Deep-investigate a specific PID
 python -m netwatch --investigate 1234
 
+# Scan all processes for injected DLLs
+python -m netwatch --dll-scan
+
+# Scan a specific PID for DLL injection
+python -m netwatch --dll-scan-pid 1234
+
+# Update threat intelligence feeds (Feodo Tracker, SSLBL, URLhaus)
+python -m netwatch --update-feeds
+
+# Show feed status and cached IOC counts
+python -m netwatch --feed-status
+
+# Look up a SHA256 hash in MalwareBazaar (requires free API key)
+python -m netwatch --hash-lookup <SHA256> --api-key <YOUR_KEY>
+
 # Verbose debug output
 python -m netwatch -v
 ```
@@ -56,20 +80,39 @@ python -m netwatch -v
 ## Detection Rules
 
 | # | Rule | Severity | What it catches |
-|---|---|---|---|
-| 1 | **Suspicious Port** | HIGH | Connection to known malware/C2/mining ports (4444, 6667, 3333, 31337 …) |
-| 2 | **Unexpected Network Process** | CRITICAL | Programs like `notepad.exe` or `calc.exe` making network calls |
+| --- | --- | --- | --- |
+| 1 | **Suspicious Port** | HIGH | Connection to known malware/C2/mining ports (4444, 6667, 3333, 31337 ...) |
+| 2 | **Unexpected Network Process** | CRITICAL | Programs like `notepad.exe`, `calc.exe`, or LOLBins making network calls |
 | 3 | **High Connection Rate** | MEDIUM | >50 connections in 60s (beaconing / DDoS) |
-| 4 | **IP Scan Detected** | HIGH | Process contacts ≥25 unique IPs |
-| 5 | **Port Scan Detected** | HIGH | Process connects to ≥15 unique remote ports |
+| 4 | **IP Scan Detected** | HIGH | Process contacts >=25 unique IPs |
+| 5 | **Port Scan Detected** | HIGH | Process connects to >=15 unique remote ports |
 | 6 | **Tor Network Usage** | MEDIUM | Tor process or SOCKS port 9050/9150 |
 | 7 | **Non-standard DNS Port** | MEDIUM | DNS process using ports other than 53/853/5353 |
 | 8 | **External Listener** | MEDIUM | Process listening on 0.0.0.0 or public IP on unusual port |
 | 9 | **External High-Port Connection** | LOW | Established connection to external host on ephemeral port |
+| 10 | **Known C2 IP (Threat Intel)** | CRITICAL | Connection to IP in abuse.ch C2 blocklists (Feodo, SSLBL, URLhaus) |
+| 11 | **Beaconing Detected** | HIGH | Regular-interval connections to same destination (C2 callback pattern) |
+| 12 | **Process Masquerading / LOLBin** | CRITICAL/HIGH | Critical process running from wrong directory, or LOLBin with outbound connections |
+| 13 | **DNS Exfiltration Suspect** | MEDIUM | Non-DNS process directly querying external DNS servers |
+| 14 | **Crypto Mining Detected** | HIGH | Connection to known mining pool ports on external IPs |
+
+## Threat Intelligence Feeds
+
+NetWatch auto-downloads and caches IOC feeds from [abuse.ch](https://abuse.ch) (free, no API key required):
+
+| Feed | Source | Data |
+| --- | --- | --- |
+| **Feodo Tracker** | feodotracker.abuse.ch | Botnet C2 IPs (Emotet, TrickBot, QakBot, Dridex) |
+| **SSLBL** | sslbl.abuse.ch | SSL-based C2 IP blacklist |
+| **URLhaus** | urlhaus.abuse.ch | Active malware distribution URLs, IPs, domains |
+
+Feeds are cached locally (~1 hour expiry) and loaded automatically on startup. Run `--update-feeds` to force a refresh.
+
+For enhanced hash lookups, get a free API key at [auth.abuse.ch](https://auth.abuse.ch/) and use `--api-key` or set the `ABUSE_CH_API_KEY` environment variable.
 
 ## Output Example
 
-```
+```bash
   ⚠ [CRITICAL] Unexpected Network Process — PID 9128 (notepad.exe): should not be making network connections
   ⚠ [HIGH] Suspicious Port — PID 4412 (svchost.exe): Connection to suspicious port 4444 on 203.0.113.50
 
@@ -87,13 +130,15 @@ python -m netwatch -v
 
 ```
 netwatch/
-├── __init__.py        # Package metadata
-├── __main__.py        # CLI entry point
+├── __init__.py        # Package metadata (v2.0.0)
+├── __main__.py        # CLI entry point (14 commands)
 ├── models.py          # Data classes (ConnectionRecord, Alert, ProcessProfile)
-├── monitor.py         # TrafficMonitor — polls psutil for connections
-├── detector.py        # AnomalyDetector — 9 heuristic detection rules
-├── investigator.py    # ProcessInvestigator — deep forensic dump
-└── reporter.py        # Reporter — coloured console + JSON output
+├── monitor.py         # TrafficMonitor - polls psutil for connections
+├── detector.py        # AnomalyDetector - 14 heuristic detection rules
+├── threat_intel.py    # ThreatIntelManager - IOC feed downloads, caching, lookups
+├── dll_inspector.py   # DLLInspector - 8 DLL injection heuristics + hash check
+├── investigator.py    # ProcessInvestigator - deep forensic dump
+└── reporter.py        # Reporter - coloured console + JSON output
 ```
 
 ## Notes
