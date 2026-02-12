@@ -69,11 +69,10 @@ FEEDS: dict[str, dict] = {
 # ======================================================================
 
 # --- Known C2 / malicious IPs (curated from public reports) ---
-STATIC_C2_IPS: set[str] = {
-    # Common sinkholes / known-bad ranges are NOT included to avoid FPs.
-    # This set is populated by feed downloads; static entries are reserved
-    # for well-known, long-lived C2 infrastructure.
-}
+STATIC_C2_IPS: set[str] = set()
+# Common sinkholes / known-bad ranges are NOT included to avoid FPs.
+# This set is populated by feed downloads; static entries are reserved
+# for well-known, long-lived C2 infrastructure.
 
 # --- Known malicious domains & patterns ---
 KNOWN_MALICIOUS_DOMAINS: set[str] = {

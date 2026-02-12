@@ -76,6 +76,13 @@ SUSPICIOUS_PORTS: set[int] = {
 # Ports that are almost always legitimate when a process is LISTENING.
 COMMON_LISTEN_PORTS: set[int] = {
     80, 443, 22, 53, 3389, 5432, 3306, 6379, 8080, 8443, 27017,
+    # Development / common services
+    3000, 4200, 5000, 5173, 8000, 8888, 9090, 9200, 9300,
+    # Windows services
+    135, 139, 445, 593, 1433, 1434,
+    # Common application listeners
+    5353, 5672, 5985, 6443, 8081, 8082, 8181, 8200, 8500, 9000,
+    9092, 11211, 15672, 27018, 27019, 28017,
 }
 
 # RFC-1918 / private ranges
@@ -140,10 +147,10 @@ class AnomalyDetector:
     def __init__(
         self,
         *,
-        connection_rate_threshold: int = 50,
+        connection_rate_threshold: int = 80,
         rate_window_seconds: float = 60.0,
-        min_unique_ips_for_scan_alert: int = 25,
-        port_scan_unique_ports: int = 15,
+        min_unique_ips_for_scan_alert: int = 30,
+        port_scan_unique_ports: int = 20,
         threat_intel: Optional[ThreatIntelManager] = None,
     ):
         self.connection_rate_threshold = connection_rate_threshold

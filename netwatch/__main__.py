@@ -1,12 +1,13 @@
 """
-NetWatch CLI — entry point for the network traffic anomaly detector.
+NetWatch CLI - entry point for the network traffic anomaly detector.
 
 Usage:
     python -m netwatch                      # live monitor (default 2s poll)
-    python -m netwatch --interval 5         # poll every 5 seconds
-    python -m netwatch --log alerts.json    # also write alerts to JSON file
-    python -m netwatch --snapshot           # single snapshot + analysis then exit
-    python -m netwatch --investigate 1234   # deep-dive into PID 1234
+    python -m netwatch --snapshot           # single snapshot + analysis
+    python -m netwatch --snapshot --pdf report.pdf
+    python -m netwatch --dll-scan           # scan all processes for injected DLLs
+    python -m netwatch --update-feeds       # download threat intel feeds
+    python -m netwatch --feed-status        # show feed info
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from .detector import AnomalyDetector
 from .dll_inspector import DLLInspector
 from .investigator import ProcessInvestigator
 from .monitor import TrafficMonitor
+from .pdf_report import PDFReportGenerator
 from .reporter import Reporter
 from .threat_intel import ThreatIntelManager
 
@@ -105,6 +107,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Look up a SHA256 hash in MalwareBazaar (requires --api-key)",
     )
     p.add_argument(
+        "--pdf",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Generate a PDF report (combine with --snapshot or --dll-scan)",
+    )
+    p.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -120,7 +129,7 @@ BANNER = r"""
  | |\  |  __/ |_ \  /\  / (_| | || (__| | | |
  |_| \_|\___|\__| \/  \/ \__,_|\__\___|_| |_|
                                              
-  Network Traffic Anomaly Detector  v2.0.0
+  Network Traffic Anomaly Detector  v2.1.0
   Threat Intelligence Enhanced
 """
 
@@ -196,26 +205,49 @@ def main() -> None:
 
     # ---- Auto-load feeds silently (if cached) ----
     if threat_intel.needs_update():
-        print("  [i] Threat intel feeds not cached. Downloading...\n")
+        print("  [i] Downloading threat intel feeds (first run)...\n")
         threat_intel.update_feeds(quiet=True)
-        print(f"  [i] Loaded {len(threat_intel.c2_ips)} C2 IPs, "
-              f"{len(threat_intel.malicious_domains)} domains from feeds.\n")
+        n_ips = len(threat_intel.c2_ips)
+        n_dom = len(threat_intel.malicious_domains)
+        print(f"  [+] Loaded {n_ips:,} C2 IPs, {n_dom:,} domains from feeds.\n")
+
+    # ---- PDF report helper ----
+    def _maybe_pdf(
+        alerts=None, profiles=None, investigations=None,
+        dll_results=None, duration=None, connections=0,
+    ):
+        if not args.pdf:
+            return
+        gen = PDFReportGenerator()
+        path = gen.generate(
+            args.pdf,
+            alerts=alerts or [],
+            profiles=profiles or [],
+            investigations=investigations,
+            dll_results=dll_results,
+            feed_status=threat_intel.get_feed_status(),
+            scan_duration=duration,
+            connection_count=connections,
+        )
+        print(f"\n  [PDF] Report saved: {path}\n")
 
     # ---- DLL scan mode ----
     if args.dll_scan or args.dll_scan_pid is not None:
         dll_inspector = DLLInspector(threat_intel=threat_intel)
         reporter = Reporter(log_file=args.log)
         if args.dll_scan_pid is not None:
-            print(f"  Scanning PID {args.dll_scan_pid} for injected DLLs…\n")
+            print(f"  Scanning PID {args.dll_scan_pid} for injected DLLs...\n")
             result = dll_inspector.scan_process(args.dll_scan_pid)
             if result:
                 reporter.print_dll_scan([result])
+                _maybe_pdf(dll_results=[result] if result.is_suspicious else None)
             else:
-                print(f"  Could not scan PID {args.dll_scan_pid} (not found or access denied).")
+                print(f"  Could not scan PID {args.dll_scan_pid} (not found or access denied).\n")
         else:
-            print("  Scanning all processes for injected DLLs (this may take a moment)…\n")
+            print("  Scanning all processes for injected DLLs...\n")
             results = dll_inspector.scan_all()
             reporter.print_dll_scan(results)
+            _maybe_pdf(dll_results=results or None)
         reporter.close()
         return
 
@@ -253,17 +285,29 @@ def main() -> None:
 
     if args.snapshot:
         # Single-shot mode
-        print("  Taking snapshot…\n")
+        print("  Taking snapshot...\n")
         records = monitor.snapshot()
         alerts = detector.analyse(records)
         total_alerts += len(alerts)
         reporter.report_alerts(alerts)
         risky = detector.get_risky_profiles(args.min_risk)
         reporter.print_summary(risky)
+
+        investigations = []
         for profile in risky[:5]:
             inv = investigator.investigate(profile.pid)
             if inv:
                 reporter.print_investigation(inv)
+                investigations.append(inv)
+
+        elapsed = time.time() - start_time
+        _maybe_pdf(
+            alerts=alerts,
+            profiles=list(detector.profiles.values()),
+            investigations=investigations or None,
+            duration=elapsed,
+            connections=len(records),
+        )
         reporter.close()
         return
 
@@ -296,13 +340,23 @@ def main() -> None:
     risky = detector.get_risky_profiles(args.min_risk)
     reporter.print_summary(risky)
 
+    investigations = []
     if risky:
-        print(f"  {len(risky)} suspicious process(es) — running deep investigations…\n")
+        print(f"  {len(risky)} suspicious process(es) — running deep investigations...\n")
         for profile in risky[:10]:
             inv = investigator.investigate(profile.pid)
             if inv:
                 reporter.print_investigation(inv)
+                investigations.append(inv)
 
+    elapsed = time.time() - start_time
+    _maybe_pdf(
+        alerts=[a for p in detector.profiles.values() for a in p.alerts],
+        profiles=list(detector.profiles.values()),
+        investigations=investigations or None,
+        duration=elapsed,
+        connections=total_alerts,  # approximate
+    )
     reporter.close()
     print(f"  Done. {total_alerts} alert(s) raised during session.\n")
 

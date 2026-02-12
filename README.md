@@ -12,6 +12,7 @@ A Python tool that monitors live network connections, detects suspicious behavio
 | **Threat intelligence feeds** | Auto-downloads IOC feeds from abuse.ch (Feodo Tracker, SSLBL, URLhaus) — C2 IPs, malicious domains, malware URLs |
 | **MalwareBazaar integration** | Optional SHA256 hash lookups against MalwareBazaar API (free auth key) |
 | **DLL injection detection** | 8 heuristics including hash verification against threat intel |
+| **PDF report generator** | `--pdf report.pdf` creates a multi-page report with executive summary, alert tables, investigations, feed status, and a prioritised **Recommended Actions** section |
 | **80+ known malware DLL names** | Extended definitions covering Cobalt Strike, Metasploit, Mimikatz, RATs, stealers, loaders, APT tools |
 | **30+ malware family database** | Built-in descriptions for Emotet, TrickBot, QakBot, Cobalt Strike, RedLine, Lumma, and more |
 | **Process masquerade detection** | Validates critical Windows processes run from expected directories |
@@ -21,12 +22,13 @@ A Python tool that monitors live network connections, detects suspicious behavio
 | **Deep investigation** | Drills into flagged processes - parent/child tree, open files, env vars, fileless-malware check |
 | **JSON alerting** | Optionally writes structured alerts to a JSON file for SIEM ingestion |
 | **Coloured output** | Severity-coded terminal output for quick triage |
-| **Interactive batch menu** | Windows batch file UI with 11 menu options |
+| **Interactive batch menu** | Windows batch file UI with 12 menu options |
 
 ## Requirements
 
 - Python 3.10+
-- `psutil` (the only dependency)
+- `psutil`
+- `fpdf2` (for PDF report generation)
 - **Administrator / root** privileges (required to read connection-to-process mappings)
 
 ## Installation
@@ -51,6 +53,10 @@ python -m netwatch --duration 60
 
 # Single snapshot - analyse and exit immediately
 python -m netwatch --snapshot
+
+# Generate a PDF report (works with --snapshot or --dll-scan)
+python -m netwatch --snapshot --pdf report.pdf
+python -m netwatch --dll-scan --pdf dll_report.pdf
 
 # Write alerts to a JSON log file
 python -m netwatch --log alerts.json
@@ -83,9 +89,9 @@ python -m netwatch -v
 | --- | --- | --- | --- |
 | 1 | **Suspicious Port** | HIGH | Connection to known malware/C2/mining ports (4444, 6667, 3333, 31337 ...) |
 | 2 | **Unexpected Network Process** | CRITICAL | Programs like `notepad.exe`, `calc.exe`, or LOLBins making network calls |
-| 3 | **High Connection Rate** | MEDIUM | >50 connections in 60s (beaconing / DDoS) |
-| 4 | **IP Scan Detected** | HIGH | Process contacts >=25 unique IPs |
-| 5 | **Port Scan Detected** | HIGH | Process connects to >=15 unique remote ports |
+| 3 | **High Connection Rate** | MEDIUM | >80 connections in 60s (beaconing / DDoS) |
+| 4 | **IP Scan Detected** | HIGH | Process contacts >=30 unique IPs |
+| 5 | **Port Scan Detected** | HIGH | Process connects to >=20 unique remote ports |
 | 6 | **Tor Network Usage** | MEDIUM | Tor process or SOCKS port 9050/9150 |
 | 7 | **Non-standard DNS Port** | MEDIUM | DNS process using ports other than 53/853/5353 |
 | 8 | **External Listener** | MEDIUM | Process listening on 0.0.0.0 or public IP on unusual port |
@@ -108,6 +114,8 @@ NetWatch auto-downloads and caches IOC feeds from [abuse.ch](https://abuse.ch) (
 
 Feeds are cached locally (~1 hour expiry) and loaded automatically on startup. Run `--update-feeds` to force a refresh.
 
+Note: the downloaded feed cache files and generated `*.pdf` reports are ignored by git (see `.gitignore`).
+
 For enhanced hash lookups, get a free API key at [auth.abuse.ch](https://auth.abuse.ch/) and use `--api-key` or set the `ABUSE_CH_API_KEY` environment variable.
 
 ## Output Example
@@ -128,16 +136,17 @@ For enhanced hash lookups, get a free API key at [auth.abuse.ch](https://auth.ab
 
 ## Architecture
 
-```
+```bash
 netwatch/
-├── __init__.py        # Package metadata (v2.0.0)
-├── __main__.py        # CLI entry point (14 commands)
+├── __init__.py        # Package metadata (v2.1.0)
+├── __main__.py        # CLI entry point (monitor/snapshot/investigate/DLL scan/PDF)
 ├── models.py          # Data classes (ConnectionRecord, Alert, ProcessProfile)
 ├── monitor.py         # TrafficMonitor - polls psutil for connections
 ├── detector.py        # AnomalyDetector - 14 heuristic detection rules
 ├── threat_intel.py    # ThreatIntelManager - IOC feed downloads, caching, lookups
 ├── dll_inspector.py   # DLLInspector - 8 DLL injection heuristics + hash check
 ├── investigator.py    # ProcessInvestigator - deep forensic dump
+├── pdf_report.py      # PDFReportGenerator - multi-page report output
 └── reporter.py        # Reporter - coloured console + JSON output
 ```
 
