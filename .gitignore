@@ -1,1 +1,40 @@
-/.venv
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Threat intel feed caches (re-downloaded at runtime)
+feodo_c2_ips.txt
+feodo_c2_ips.txt.meta
+sslbl_c2_ips.csv
+sslbl_c2_ips.csv.meta
+urlhaus_hosts.txt
+urlhaus_hosts.txt.meta
+
+# Generated reports
+*.pdf
+
+# Logs
+*.log
