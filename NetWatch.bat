@@ -44,7 +44,7 @@ echo   ^|  \^| ^|/ _ \ __\ \ /\ / / _` ^| __/ __^| '_ \
 echo   ^| ^|\  ^|  __/ ^|_ \ V  V / (_^| ^| ^|^| (__^| ^| ^| ^|
 echo   ^|_^| \_^|\___^|\__^| \_/\_/ \__,_^|\__\___^|_^| ^|_^|
 echo.
-echo    Network Traffic Anomaly Detector  v2.0.0
+echo    Network Traffic Anomaly Detector  v2.1.0
 echo    Threat Intelligence Enhanced
 echo   ============================================================
 echo.
@@ -59,12 +59,13 @@ echo     [8]  Live Monitor + Log       - continuous monitor with JSON log
 echo     [9]  Update Threat Feeds      - download latest C2 IP/domain blocklists
 echo     [S]  Feed Status              - show threat intel feed info
 echo     [H]  Hash Lookup              - check SHA256 against MalwareBazaar
+echo     [P]  PDF Report               - snapshot + generate PDF report
 echo.
 echo     [0]  Exit
 echo.
 echo   ============================================================
 echo.
-set /p "CHOICE=  Select an option [0-9/S/H]: "
+set /p "CHOICE=  Select an option [0-9/S/H/P]: "
 
 if "%CHOICE%"=="1" goto SNAPSHOT
 if "%CHOICE%"=="2" goto LIVE
@@ -77,6 +78,7 @@ if "%CHOICE%"=="8" goto LIVE_LOG
 if "%CHOICE%"=="9" goto UPDATE_FEEDS
 if /i "%CHOICE%"=="S" goto FEED_STATUS
 if /i "%CHOICE%"=="H" goto HASH_LOOKUP
+if /i "%CHOICE%"=="P" goto PDF_REPORT
 if "%CHOICE%"=="0" goto EXIT
 
 echo.
@@ -245,6 +247,20 @@ if "%API_KEY%"=="" (
 ) else (
     "%PYTHON%" -m netwatch --hash-lookup %HASH% --api-key %API_KEY%
 )
+echo.
+pause
+goto MENU
+
+:: -- P. PDF Report ---------------------------------------------------
+:PDF_REPORT
+cls
+set "PDFFILE=%SCRIPT_DIR%NetWatch_Report_%date:~-4%%date:~4,2%%date:~7,2%_%time:~0,2%%time:~3,2%%time:~6,2%.pdf"
+set "PDFFILE=%PDFFILE: =0%"
+echo.
+echo   Generating PDF security report...
+echo   Output: %PDFFILE%
+echo.
+"%PYTHON%" -m netwatch --snapshot --pdf "%PDFFILE%"
 echo.
 pause
 goto MENU
