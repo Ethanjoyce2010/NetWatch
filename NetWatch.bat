@@ -5,6 +5,7 @@ setlocal EnableDelayedExpansion
 
 :: ── Locate Python venv ──────────────────────────────────────────────
 set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
 set "PYTHON=%SCRIPT_DIR%.venv\Scripts\python.exe"
 
 if not exist "%PYTHON%" (
@@ -44,7 +45,7 @@ echo   ^|  \^| ^|/ _ \ __\ \ /\ / / _` ^| __/ __^| '_ \
 echo   ^| ^|\  ^|  __/ ^|_ \ V  V / (_^| ^| ^|^| (__^| ^| ^| ^|
 echo   ^|_^| \_^|\___^|\__^| \_/\_/ \__,_^|\__\___^|_^| ^|_^|
 echo.
-echo    Network Traffic Anomaly Detector  v2.1.0
+echo    Network Traffic Anomaly Detector  v2.2.0
 echo    Threat Intelligence Enhanced
 echo   ============================================================
 echo.

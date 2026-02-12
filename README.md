@@ -138,7 +138,7 @@ For enhanced hash lookups, get a free API key at [auth.abuse.ch](https://auth.ab
 
 ```bash
 netwatch/
-├── __init__.py        # Package metadata (v2.1.0)
+├── __init__.py        # Package metadata (v2.2.0)
 ├── __main__.py        # CLI entry point (monitor/snapshot/investigate/DLL scan/PDF)
 ├── models.py          # Data classes (ConnectionRecord, Alert, ProcessProfile)
 ├── monitor.py         # TrafficMonitor - polls psutil for connections

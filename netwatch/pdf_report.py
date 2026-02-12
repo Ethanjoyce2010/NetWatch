@@ -69,7 +69,7 @@ def _safe(text: str) -> str:
 class _NetWatchPDF(FPDF):
     """FPDF subclass with NetWatch header/footer branding."""
 
-    def __init__(self, version: str = "2.1.0"):
+    def __init__(self, version: str = "2.2.0"):
         super().__init__(orientation="P", unit="mm", format="A4")
         self._version = version
         self.set_auto_page_break(auto=True, margin=20)
@@ -613,7 +613,7 @@ class PDFReportGenerator:
         # -- DLL findings --
         if dll_results:
             suspicious_count = sum(
-                len(entry.get("suspicious_dlls", [])) for entry in dll_results
+                len(entry.suspicious_modules) for entry in dll_results
             )
             if suspicious_count:
                 actions.append((

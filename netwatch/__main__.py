@@ -129,7 +129,7 @@ BANNER = r"""
  | |\  |  __/ |_ \  /\  / (_| | || (__| | | |
  |_| \_|\___|\__| \/  \/ \__,_|\__\___|_| |_|
                                              
-  Network Traffic Anomaly Detector  v2.1.0
+  Network Traffic Anomaly Detector  v2.2.0
   Threat Intelligence Enhanced
 """
 
@@ -300,11 +300,26 @@ def main() -> None:
                 reporter.print_investigation(inv)
                 investigations.append(inv)
 
+        # Run a DLL scan on risky processes for the report
+        dll_inspector = DLLInspector(threat_intel=threat_intel)
+        dll_results_list = []
+        scan_pids = {p.pid for p in risky[:10]}
+        if scan_pids:
+            print("  Scanning flagged processes for DLL injection...\n")
+            for pid in scan_pids:
+                result = dll_inspector.scan_process(pid)
+                if result:
+                    dll_results_list.append(result)
+            suspicious = [r for r in dll_results_list if r.is_suspicious]
+            if suspicious:
+                reporter.print_dll_scan(suspicious)
+
         elapsed = time.time() - start_time
         _maybe_pdf(
             alerts=alerts,
             profiles=list(detector.profiles.values()),
             investigations=investigations or None,
+            dll_results=dll_results_list or None,
             duration=elapsed,
             connections=len(records),
         )
