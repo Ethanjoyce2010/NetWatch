@@ -125,6 +125,7 @@ class PDFReportGenerator:
         feed_status: Optional[dict] = None,
         scan_duration: Optional[float] = None,
         connection_count: int = 0,
+        network_stats: Optional[dict] = None,
     ) -> str:
         """Build and save a PDF report. Returns the output file path."""
         alerts = alerts or []
@@ -139,6 +140,10 @@ class PDFReportGenerator:
         # ---- Executive summary ----
         pdf.add_page()
         self._executive_summary(pdf, alerts, profiles, scan_duration, connection_count)
+
+        # ---- Network statistics ----
+        if network_stats:
+            self._network_stats_section(pdf, network_stats)
 
         # ---- Alerts table ----
         if alerts:
@@ -290,6 +295,64 @@ class PDFReportGenerator:
             )
 
         pdf.multi_cell(0, 5, "  ".join(summary_parts))
+
+    # ==================================================================
+    # Network statistics
+    # ==================================================================
+
+    def _network_stats_section(self, pdf: _NetWatchPDF, stats: dict):
+        self._section_heading(pdf, "Network Statistics")
+
+        # Overview grid
+        pdf.set_font("Helvetica", "", 10)
+        overview_items = [
+            ("Total Connections", str(stats.get("total_connections", 0))),
+            ("Unique Remote IPs", str(stats.get("unique_remote_ips", 0))),
+            ("Unique Remote Ports", str(stats.get("unique_remote_ports", 0))),
+            ("Unique Processes", str(stats.get("unique_processes", 0))),
+            ("TCP Connections", str(stats.get("tcp_count", 0))),
+            ("UDP Connections", str(stats.get("udp_count", 0))),
+            ("Established", str(stats.get("established_count", 0))),
+            ("Listening", str(stats.get("listen_count", 0))),
+            ("Internal Traffic", str(stats.get("internal_count", 0))),
+            ("External Traffic", str(stats.get("external_count", 0))),
+        ]
+
+        col_w = 95
+        for i in range(0, len(overview_items), 2):
+            for j in range(2):
+                if i + j < len(overview_items):
+                    label, value = overview_items[i + j]
+                    pdf.set_font("Helvetica", "B", 9)
+                    pdf.cell(45, 6, _safe(label + ":"), border=0)
+                    pdf.set_font("Helvetica", "", 9)
+                    pdf.cell(50, 6, _safe(value), border=0)
+            pdf.ln()
+
+        # Top Remote IPs
+        top_ips = stats.get("top_remote_ips", [])
+        if top_ips:
+            pdf.ln(4)
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(0, 6, "Top Remote IPs", ln=True)
+            pdf.set_font("Helvetica", "", 9)
+            for ip, count in top_ips[:10]:
+                pdf.cell(80, 5, _safe(str(ip)), border=0)
+                pdf.cell(30, 5, f"{count} connections", border=0, ln=True)
+
+        # Top Processes
+        top_procs = stats.get("top_processes", [])
+        if top_procs:
+            pdf.ln(4)
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(0, 6, "Top Processes by Connection Count", ln=True)
+            pdf.set_font("Helvetica", "", 9)
+            for name, pid, count in top_procs[:10]:
+                pdf.cell(60, 5, _safe(str(name)), border=0)
+                pdf.cell(30, 5, f"PID {pid}", border=0)
+                pdf.cell(30, 5, f"{count} connections", border=0, ln=True)
+
+        pdf.ln(4)
 
     # ==================================================================
     # Alerts table

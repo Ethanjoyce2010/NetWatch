@@ -35,6 +35,7 @@ import psutil
 
 from .models import Alert, ConnectionRecord, ProcessProfile, Severity
 from .threat_intel import ThreatIntelManager, get_threat_intel
+from .whitelist import ProcessWhitelist
 
 logger = logging.getLogger("netwatch.detector")
 
@@ -98,6 +99,22 @@ PRIVATE_NETWORKS = [
 # Known Tor exit-node ranges (sample — extend with a live feed in production).
 TOR_INDICATORS = {"tor", "tor.exe", "tor.real"}
 
+# Processes that commonly listen on various ports and should NOT trigger
+# External Listener alerts even on non-standard ports.
+KNOWN_LISTENER_PROCESSES: set[str] = {
+    "svchost.exe", "system", "lsass.exe", "services.exe",
+    "spoolsv.exe", "wininit.exe", "dashost.exe", "sihost.exe",
+    "searchindexer.exe", "searchhost.exe",
+    "sqlservr.exe", "postgres.exe", "mysqld.exe", "mongod.exe",
+    "httpd.exe", "nginx.exe", "apache2", "caddy.exe",
+    "node.exe", "java.exe", "javaw.exe", "python.exe", "pythonw.exe",
+    "com.docker.backend", "docker.exe", "containerd.exe",
+    "vmware-authd.exe", "vmware-hostd.exe", "vmnetdhcp.exe",
+    "virtualbox.exe", "vboxheadless.exe",
+    "spotify.exe", "discord.exe", "teams.exe",
+    "onedrive.exe", "dropbox.exe",
+}
+
 # Processes that should almost never make outbound connections.
 UNEXPECTED_NETWORK_PROCESSES: set[str] = {
     "notepad.exe", "calc.exe", "mspaint.exe", "write.exe",
@@ -152,6 +169,7 @@ class AnomalyDetector:
         min_unique_ips_for_scan_alert: int = 30,
         port_scan_unique_ports: int = 20,
         threat_intel: Optional[ThreatIntelManager] = None,
+        whitelist: Optional[ProcessWhitelist] = None,
     ):
         self.connection_rate_threshold = connection_rate_threshold
         self.rate_window_seconds = rate_window_seconds
@@ -160,6 +178,9 @@ class AnomalyDetector:
 
         # Threat intelligence integration
         self.threat_intel = threat_intel or get_threat_intel()
+
+        # Process whitelist (suppresses known-good alerts)
+        self.whitelist = whitelist or ProcessWhitelist()
 
         # PID → ProcessProfile
         self.profiles: dict[int, ProcessProfile] = {}
@@ -252,6 +273,10 @@ class AnomalyDetector:
     ) -> list[Alert]:
         """Helper that creates an alert if it hasn't been fired yet."""
         if key in self._fired:
+            return []
+        # Whitelist suppression
+        if self.whitelist.is_suppressed(rec.process_name, rule):
+            logger.debug("Suppressed by whitelist: %s → %s", rec.process_name, rule)
             return []
         self._fired.add(key)
         alert = Alert(
@@ -367,6 +392,9 @@ class AnomalyDetector:
         if rec.status not in ("LISTEN", "NONE"):
             return []
         if rec.local_port in COMMON_LISTEN_PORTS:
+            return []
+        # Skip known legitimate listener processes
+        if rec.process_name.lower() in KNOWN_LISTENER_PROCESSES:
             return []
         if rec.local_addr in ("0.0.0.0", "::", ""):
             return self._emit(

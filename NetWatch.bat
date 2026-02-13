@@ -45,7 +45,7 @@ echo   ^|  \^| ^|/ _ \ __\ \ /\ / / _` ^| __/ __^| '_ \
 echo   ^| ^|\  ^|  __/ ^|_ \ V  V / (_^| ^| ^|^| (__^| ^| ^| ^|
 echo   ^|_^| \_^|\___^|\__^| \_/\_/ \__,_^|\__\___^|_^| ^|_^|
 echo.
-echo    Network Traffic Anomaly Detector  v2.2.0
+echo    Network Traffic Anomaly Detector  v2.3.0
 echo    Threat Intelligence Enhanced
 echo   ============================================================
 echo.
@@ -61,12 +61,14 @@ echo     [9]  Update Threat Feeds      - download latest C2 IP/domain blocklists
 echo     [S]  Feed Status              - show threat intel feed info
 echo     [H]  Hash Lookup              - check SHA256 against MalwareBazaar
 echo     [P]  PDF Report               - snapshot + generate PDF report
+echo     [T]  Top Talkers + Stats      - top processes and network stats
+echo     [C]  CSV Export               - export snapshot to CSV files
 echo.
 echo     [0]  Exit
 echo.
 echo   ============================================================
 echo.
-set /p "CHOICE=  Select an option [0-9/S/H/P]: "
+set /p "CHOICE=  Select an option [0-9/S/H/P/T/C]: "
 
 if "%CHOICE%"=="1" goto SNAPSHOT
 if "%CHOICE%"=="2" goto LIVE
@@ -80,6 +82,8 @@ if "%CHOICE%"=="9" goto UPDATE_FEEDS
 if /i "%CHOICE%"=="S" goto FEED_STATUS
 if /i "%CHOICE%"=="H" goto HASH_LOOKUP
 if /i "%CHOICE%"=="P" goto PDF_REPORT
+if /i "%CHOICE%"=="T" goto TOP_STATS
+if /i "%CHOICE%"=="C" goto CSV_EXPORT
 if "%CHOICE%"=="0" goto EXIT
 
 echo.
@@ -261,7 +265,35 @@ echo.
 echo   Generating PDF security report...
 echo   Output: %PDFFILE%
 echo.
-"%PYTHON%" -m netwatch --snapshot --pdf "%PDFFILE%"
+"%PYTHON%" -m netwatch --snapshot --pdf "%PDFFILE%" --stats
+echo.
+pause
+goto MENU
+
+:: -- T. Top Talkers + Stats ------------------------------------------
+:TOP_STATS
+cls
+set /p "TOPN=  How many top processes to show (default 10): "
+if "%TOPN%"=="" set "TOPN=10"
+echo.
+echo   Scanning network, showing top %TOPN% talkers and stats...
+echo.
+"%PYTHON%" -m netwatch --snapshot --top %TOPN% --stats
+echo.
+pause
+goto MENU
+
+:: -- C. CSV Export ----------------------------------------------------
+:CSV_EXPORT
+cls
+set "CSVFILE=%SCRIPT_DIR%netwatch_alerts_%date:~-4%%date:~4,2%%date:~7,2%_%time:~0,2%%time:~3,2%%time:~6,2%.csv"
+set "CSVFILE=%CSVFILE: =0%"
+set "CSVCONN=%SCRIPT_DIR%netwatch_connections_%date:~-4%%date:~4,2%%date:~7,2%_%time:~0,2%%time:~3,2%%time:~6,2%.csv"
+set "CSVCONN=%CSVCONN: =0%"
+echo.
+echo   Running snapshot and exporting to CSV...
+echo.
+"%PYTHON%" -m netwatch --snapshot --export-csv "%CSVFILE%" --export-connections-csv "%CSVCONN%"
 echo.
 pause
 goto MENU

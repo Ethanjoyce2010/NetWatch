@@ -1,0 +1,19 @@
+{
+    "_comment": "NetWatch Process Whitelist -- processes listed here will have the specified alert rules suppressed. Use [\"*\"] to suppress ALL alerts for a process.",
+    "svchost.exe":        ["External Listener"],
+    "System":             ["External Listener"],
+    "lsass.exe":          ["External Listener"],
+    "spoolsv.exe":        ["External Listener"],
+    "wininit.exe":        ["External Listener"],
+    "services.exe":       ["External Listener"],
+    "mDNSResponder.exe":  ["External Listener", "Non-standard DNS Port"],
+    "vmware-authd.exe":   ["External Listener"],
+    "vmware-hostd.exe":   ["External Listener"],
+    "vmms.exe":           ["External Listener"],
+    "httpd.exe":          ["External Listener"],
+    "nginx.exe":          ["External Listener"],
+    "com.docker.backend": ["External Listener"],
+    "AnyDesk.exe":        ["External Listener"],
+    "tailscaled.exe":     ["External Listener"],
+    "WireguardService.exe": ["External Listener"]
+}

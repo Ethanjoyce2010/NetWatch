@@ -25,6 +25,9 @@ from .monitor import TrafficMonitor
 from .pdf_report import PDFReportGenerator
 from .reporter import Reporter
 from .threat_intel import ThreatIntelManager
+from .whitelist import ProcessWhitelist
+from .stats import compute_stats, print_stats
+from .csv_export import export_alerts_csv, export_connections_csv
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -114,6 +117,41 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Generate a PDF report (combine with --snapshot or --dll-scan)",
     )
     p.add_argument(
+        "--export-csv",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Export alerts to CSV file",
+    )
+    p.add_argument(
+        "--export-connections-csv",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Export raw connection records to CSV file",
+    )
+    p.add_argument(
+        "--top",
+        type=int,
+        default=None,
+        nargs="?",
+        const=10,
+        metavar="N",
+        help="Show top-N processes by connection count (default: 10)",
+    )
+    p.add_argument(
+        "--stats",
+        action="store_true",
+        help="Show network statistics summary after snapshot/monitoring",
+    )
+    p.add_argument(
+        "--whitelist",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Path to a whitelist.json for suppressing known-good alerts",
+    )
+    p.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -129,13 +167,23 @@ BANNER = r"""
  | |\  |  __/ |_ \  /\  / (_| | || (__| | | |
  |_| \_|\___|\__| \/  \/ \__,_|\__\___|_| |_|
                                              
-  Network Traffic Anomaly Detector  v2.2.0
+  Network Traffic Anomaly Detector  v2.3.0
   Threat Intelligence Enhanced
 """
 
 
 def main() -> None:
     args = _build_parser().parse_args()
+
+    # Ensure stdout can handle Unicode on Windows terminals
+    if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(errors="replace")  # type: ignore[union-attr]
+            if hasattr(sys.stderr, "reconfigure"):
+                sys.stderr.reconfigure(errors="replace")  # type: ignore[union-attr]
+        except Exception:
+            pass
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -147,6 +195,11 @@ def main() -> None:
 
     # ---- Initialize threat intel ----
     threat_intel = ThreatIntelManager(api_key=args.api_key)
+
+    # ---- Initialize whitelist ----
+    whitelist = ProcessWhitelist(path=args.whitelist)
+    if whitelist.loaded:
+        print(f"  {whitelist.summary()}\n")
 
     # ---- Feed management modes ----
     if args.update_feeds:
@@ -215,6 +268,7 @@ def main() -> None:
     def _maybe_pdf(
         alerts=None, profiles=None, investigations=None,
         dll_results=None, duration=None, connections=0,
+        network_stats=None,
     ):
         if not args.pdf:
             return
@@ -228,6 +282,7 @@ def main() -> None:
             feed_status=threat_intel.get_feed_status(),
             scan_duration=duration,
             connection_count=connections,
+            network_stats=network_stats,
         )
         print(f"\n  [PDF] Report saved: {path}\n")
 
@@ -264,7 +319,7 @@ def main() -> None:
 
     # ---- Monitor / snapshot mode ----
     monitor = TrafficMonitor(poll_interval=args.interval)
-    detector = AnomalyDetector(threat_intel=threat_intel)
+    detector = AnomalyDetector(threat_intel=threat_intel, whitelist=whitelist)
     reporter = Reporter(log_file=args.log)
     investigator = ProcessInvestigator()
 
@@ -293,6 +348,25 @@ def main() -> None:
         risky = detector.get_risky_profiles(args.min_risk)
         reporter.print_summary(risky)
 
+        # --top: show top-N talkers
+        if args.top:
+            print(f"\n  Top {args.top} processes by connection count:\n")
+            sorted_profiles = sorted(
+                detector.profiles.values(),
+                key=lambda p: p.total_connections,
+                reverse=True,
+            )[:args.top]
+            for i, p in enumerate(sorted_profiles, 1):
+                risk_tag = f" [risk: {p.risk_score}]" if p.risk_score else ""
+                print(f"    {i:>2}. {p.name:<30} PID {p.pid:<8} {p.total_connections:>4} conn{risk_tag}")
+            print()
+
+        # --stats: network statistics summary
+        if args.stats or args.top:
+            stats = compute_stats(records, list(detector.profiles.values()), top_n=args.top or 10)
+            if args.stats:
+                print_stats(stats)
+
         investigations = []
         for profile in risky[:5]:
             inv = investigator.investigate(profile.pid)
@@ -315,6 +389,20 @@ def main() -> None:
                 reporter.print_dll_scan(suspicious)
 
         elapsed = time.time() - start_time
+
+        # --export-csv: export alerts
+        if args.export_csv:
+            csv_path = export_alerts_csv(alerts, args.export_csv)
+            print(f"  [CSV] Alerts exported: {csv_path}\n")
+        if args.export_connections_csv:
+            csv_path = export_connections_csv(records, args.export_connections_csv)
+            print(f"  [CSV] Connections exported: {csv_path}\n")
+
+        # Compute stats for PDF (always computed, cheap)
+        from .stats import stats_to_dict
+        snap_stats = compute_stats(records, list(detector.profiles.values()))
+        snap_stats_dict = stats_to_dict(snap_stats)
+
         _maybe_pdf(
             alerts=alerts,
             profiles=list(detector.profiles.values()),
@@ -322,6 +410,7 @@ def main() -> None:
             dll_results=dll_results_list or None,
             duration=elapsed,
             connections=len(records),
+            network_stats=snap_stats_dict,
         )
         reporter.close()
         return
@@ -365,8 +454,15 @@ def main() -> None:
                 investigations.append(inv)
 
     elapsed = time.time() - start_time
+
+    # --export-csv on continuous mode
+    all_alerts = [a for p in detector.profiles.values() for a in p.alerts]
+    if args.export_csv:
+        csv_path = export_alerts_csv(all_alerts, args.export_csv)
+        print(f"  [CSV] Alerts exported: {csv_path}\n")
+
     _maybe_pdf(
-        alerts=[a for p in detector.profiles.values() for a in p.alerts],
+        alerts=all_alerts,
         profiles=list(detector.profiles.values()),
         investigations=investigations or None,
         duration=elapsed,

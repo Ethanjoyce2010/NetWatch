@@ -106,7 +106,7 @@ EXTENDED_SUSPICIOUS_PORTS: set[int] = {
     5555,   # Android debug / DarkComet
     1337,   # leet / generic backdoor
     31337,  # Back Orifice
-    12345, 54321,  # NetBus, classic trojans
+    12345, 54321,  # NetBus, classic trojans 
     23946,  # Android reverse shell
     5900, 5901,  # VNC (often abused)
     # IRC C2

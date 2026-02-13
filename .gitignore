@@ -35,6 +35,8 @@ urlhaus_hosts.txt.meta
 
 # Generated reports
 *.pdf
+netwatch_alerts_*.csv
+netwatch_connections_*.csv
 
 # Logs
 *.log

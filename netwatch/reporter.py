@@ -29,6 +29,18 @@ _BOLD = "\033[1m"
 _DIM = "\033[2m"
 
 
+def _safe_print(*args, **kwargs):
+    """Print with fallback encoding for Windows terminals that can't handle Unicode."""
+    import sys
+    try:
+        print(*args, **kwargs)
+    except UnicodeEncodeError:
+        text = " ".join(str(a) for a in args)
+        text = text.encode(sys.stdout.encoding or "ascii", errors="replace").decode(
+            sys.stdout.encoding or "ascii"
+        )
+        print(text, **{k: v for k, v in kwargs.items() if k != "end"})
+
 def _severity_color(severity: Severity) -> str:
     return _COLORS.get(severity, "")
 
@@ -52,7 +64,7 @@ class Reporter:
         for alert in alerts:
             self._alert_count += 1
             color = _severity_color(alert.severity)
-            print(
+            _safe_print(
                 f"  {color}{_BOLD}⚠ [{alert.severity.value}]{_RESET} "
                 f"{color}{alert.rule_name}{_RESET} — "
                 f"PID {alert.pid} ({alert.process_name}): {alert.description}"
@@ -192,7 +204,7 @@ class Reporter:
                 print(f"       {k} = {v[:80]}")
 
         if inv.suspicious_dlls:
-            print(
+            _safe_print(
                 f"     {_COLORS[Severity.CRITICAL]}{_BOLD}"
                 f"⚠ SUSPICIOUS DLLs ({len(inv.suspicious_dlls)} found, "
                 f"{inv.total_loaded_modules} total modules loaded):{_RESET}"
@@ -207,7 +219,7 @@ class Reporter:
             print(f"     {_DIM}Loaded modules    : {inv.total_loaded_modules} (none suspicious){_RESET}")
 
         if inv.exe_exists_on_disk is False:
-            print(
+            _safe_print(
                 f"     {_COLORS[Severity.CRITICAL]}{_BOLD}"
                 f"⚠ EXECUTABLE NOT FOUND ON DISK — possible fileless malware{_RESET}"
             )

@@ -12,7 +12,12 @@ A Python tool that monitors live network connections, detects suspicious behavio
 | **Threat intelligence feeds** | Auto-downloads IOC feeds from abuse.ch (Feodo Tracker, SSLBL, URLhaus) — C2 IPs, malicious domains, malware URLs |
 | **MalwareBazaar integration** | Optional SHA256 hash lookups against MalwareBazaar API (free auth key) |
 | **DLL injection detection** | 8 heuristics including hash verification against threat intel |
-| **PDF report generator** | `--pdf report.pdf` creates a multi-page report with executive summary, alert tables, investigations, feed status, and a prioritised **Recommended Actions** section |
+| **PDF report generator** | `--pdf report.pdf` creates a multi-page report with executive summary, network stats, alert tables, investigations, feed status, and a prioritised **Recommended Actions** section |
+| **Network statistics** | `--stats` shows protocol breakdown, traffic direction, top remote IPs, top processes, connection states |
+| **Top talkers** | `--top N` ranks the busiest processes by connection count |
+| **Process whitelist** | Suppress known-good alerts via `whitelist.json` (e.g. svchost.exe External Listener noise) |
+| **CSV export** | `--export-csv` / `--export-connections-csv` for spreadsheet or SIEM analysis |
+| **Smart listener filter** | Known Windows services auto-excluded from External Listener alerts |
 | **80+ known malware DLL names** | Extended definitions covering Cobalt Strike, Metasploit, Mimikatz, RATs, stealers, loaders, APT tools |
 | **30+ malware family database** | Built-in descriptions for Emotet, TrickBot, QakBot, Cobalt Strike, RedLine, Lumma, and more |
 | **Process masquerade detection** | Validates critical Windows processes run from expected directories |
@@ -22,7 +27,7 @@ A Python tool that monitors live network connections, detects suspicious behavio
 | **Deep investigation** | Drills into flagged processes - parent/child tree, open files, env vars, fileless-malware check |
 | **JSON alerting** | Optionally writes structured alerts to a JSON file for SIEM ingestion |
 | **Coloured output** | Severity-coded terminal output for quick triage |
-| **Interactive batch menu** | Windows batch file UI with 12 menu options |
+| **Interactive batch menu** | Windows batch file UI with 14 menu options |
 
 ## Requirements
 
@@ -81,6 +86,21 @@ python -m netwatch --hash-lookup <SHA256> --api-key <YOUR_KEY>
 
 # Verbose debug output
 python -m netwatch -v
+
+# Show network statistics summary
+python -m netwatch --snapshot --stats
+
+# Show top 15 processes by connection count + stats
+python -m netwatch --snapshot --top 15 --stats
+
+# Export alerts and connections to CSV
+python -m netwatch --snapshot --export-csv alerts.csv --export-connections-csv conns.csv
+
+# Use a custom whitelist file
+python -m netwatch --snapshot --whitelist my_whitelist.json
+
+# Full combo: snapshot + stats + PDF + CSV
+python -m netwatch --snapshot --stats --pdf report.pdf --export-csv alerts.csv
 ```
 
 ## Detection Rules
@@ -138,7 +158,7 @@ For enhanced hash lookups, get a free API key at [auth.abuse.ch](https://auth.ab
 
 ```bash
 netwatch/
-├── __init__.py        # Package metadata (v2.2.0)
+├── __init__.py        # Package metadata (v2.3.0)
 ├── __main__.py        # CLI entry point (monitor/snapshot/investigate/DLL scan/PDF)
 ├── models.py          # Data classes (ConnectionRecord, Alert, ProcessProfile)
 ├── monitor.py         # TrafficMonitor - polls psutil for connections
@@ -147,7 +167,10 @@ netwatch/
 ├── dll_inspector.py   # DLLInspector - 8 DLL injection heuristics + hash check
 ├── investigator.py    # ProcessInvestigator - deep forensic dump
 ├── pdf_report.py      # PDFReportGenerator - multi-page report output
-└── reporter.py        # Reporter - coloured console + JSON output
+├── reporter.py        # Reporter - coloured console + JSON output
+├── stats.py           # NetworkStats - protocol/traffic/top-talker analysis
+├── whitelist.py       # ProcessWhitelist - suppress known-good process alerts
+└── csv_export.py      # CSV exporter for alerts and connection records
 ```
 
 ## Notes
