@@ -248,8 +248,8 @@ class DLLInspector:
         self.threat_intel = threat_intel or get_threat_intel()
         # Merge extended definitions from threat intel
         self._all_suspicious_dlls = KNOWN_SUSPICIOUS_DLLS | self.threat_intel.get_suspicious_dlls()
-        # Signature verification cache: path → is_signed
-        self._sig_cache: dict[str, bool] = {}
+        # Signature verification cache: path → is_signed (None = check failed)
+        self._sig_cache: dict[str, Optional[bool]] = {}
 
     # ------------------------------------------------------------------
     # Public API

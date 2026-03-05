@@ -34,19 +34,17 @@ class TestProtocol:
 
 # ────────────────────────── ConnectionRecord ────────────────────────────
 class TestConnectionRecord:
-    def _make_record(self, **overrides):
-        defaults = dict(
-            pid=100,
-            process_name="test.exe",
-            local_addr="192.168.1.10",
-            local_port=5000,
-            remote_addr="93.184.216.34",
-            remote_port=443,
-            protocol="tcp",
-            status="ESTABLISHED",
+    def _make_record(self, **overrides: object) -> ConnectionRecord:
+        return ConnectionRecord(
+            pid=overrides.get("pid", 100),  # type: ignore[arg-type]
+            process_name=overrides.get("process_name", "test.exe"),  # type: ignore[arg-type]
+            local_addr=overrides.get("local_addr", "192.168.1.10"),  # type: ignore[arg-type]
+            local_port=overrides.get("local_port", 5000),  # type: ignore[arg-type]
+            remote_addr=overrides.get("remote_addr", "93.184.216.34"),  # type: ignore[arg-type]
+            remote_port=overrides.get("remote_port", 443),  # type: ignore[arg-type]
+            protocol=overrides.get("protocol", "tcp"),  # type: ignore[arg-type]
+            status=overrides.get("status", "ESTABLISHED"),  # type: ignore[arg-type]
         )
-        defaults.update(overrides)
-        return ConnectionRecord(**defaults)
 
     def test_defaults(self):
         rec = self._make_record()

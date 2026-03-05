@@ -79,7 +79,7 @@ class TestGeoIPEnricherWithMockedDB:
         cc, cn, asn = enricher.lookup("8.8.8.8")
         assert cc == "US"
         assert cn == "United States"
-        assert "Google" in asn
+        assert asn is not None and "Google" in asn
 
     def test_enrich_record_populates_fields(self):
         from netwatch.geoip import GeoIPEnricher
@@ -109,4 +109,4 @@ class TestGeoIPEnricherWithMockedDB:
         enricher.enrich_record(rec)
         assert rec.geo_country == "DE"
         assert rec.geo_country_name == "Germany"
-        assert "Hetzner" in rec.geo_asn
+        assert rec.geo_asn is not None and "Hetzner" in rec.geo_asn

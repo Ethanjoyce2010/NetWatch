@@ -21,10 +21,11 @@ logger = logging.getLogger("netwatch.geoip")
 
 # Try to import geoip2 — graceful degradation if not installed
 try:
-    import geoip2.database
-    import geoip2.errors
+    import geoip2.database  # type: ignore[import-unresolved]
+    import geoip2.errors  # type: ignore[import-unresolved]
     _GEOIP2_AVAILABLE = True
 except ImportError:
+    geoip2 = None  # type: ignore[assignment]
     _GEOIP2_AVAILABLE = False
     logger.debug("geoip2 not installed — GeoIP enrichment disabled. pip install geoip2")
 
@@ -63,14 +64,14 @@ class GeoIPEnricher:
 
         if country_db:
             try:
-                self._country_reader = geoip2.database.Reader(str(country_db))
+                self._country_reader = geoip2.database.Reader(str(country_db))  # type: ignore[union-attr]
                 logger.info("GeoIP country DB loaded: %s", country_db)
             except Exception as exc:
                 logger.warning("Failed to open GeoIP country DB: %s", exc)
 
         if asn_db:
             try:
-                self._asn_reader = geoip2.database.Reader(str(asn_db))
+                self._asn_reader = geoip2.database.Reader(str(asn_db))  # type: ignore[union-attr]
                 logger.info("GeoIP ASN DB loaded: %s", asn_db)
             except Exception as exc:
                 logger.warning("Failed to open GeoIP ASN DB: %s", exc)
@@ -114,14 +115,14 @@ class GeoIPEnricher:
                 resp = self._country_reader.country(addr)
                 country_code = resp.country.iso_code
                 country_name = resp.country.name
-            except (geoip2.errors.AddressNotFoundError, Exception):
+            except (geoip2.errors.AddressNotFoundError, Exception):  # type: ignore[union-attr]
                 pass
 
         if self._asn_reader:
             try:
                 resp = self._asn_reader.asn(addr)
                 asn_desc = f"AS{resp.autonomous_system_number} {resp.autonomous_system_organization}"
-            except (geoip2.errors.AddressNotFoundError, Exception):
+            except (geoip2.errors.AddressNotFoundError, Exception):  # type: ignore[union-attr]
                 pass
 
         return country_code, country_name, asn_desc

@@ -10,20 +10,29 @@ from netwatch.models import Alert, ConnectionRecord, ProcessProfile, Severity
 
 
 # ─────────────────── Helpers ────────────────────────────────────────────
-def _make_record(**overrides):
-    defaults = dict(
-        pid=100,
-        process_name="test.exe",
-        local_addr="192.168.1.10",
-        local_port=5000,
-        remote_addr="93.184.216.34",
-        remote_port=443,
-        protocol="tcp",
-        status="ESTABLISHED",
-        timestamp=time.time(),
+def _make_record(
+    pid: int = 100,
+    process_name: str = "test.exe",
+    local_addr: str = "192.168.1.10",
+    local_port: int = 5000,
+    remote_addr: str = "93.184.216.34",
+    remote_port: int = 443,
+    protocol: str = "tcp",
+    status: str = "ESTABLISHED",
+    timestamp: float | None = None,
+    **extra: object,
+) -> ConnectionRecord:
+    return ConnectionRecord(
+        pid=pid,
+        process_name=process_name,
+        local_addr=local_addr,
+        local_port=local_port,
+        remote_addr=remote_addr,
+        remote_port=remote_port,
+        protocol=protocol,
+        status=status,
+        timestamp=timestamp or time.time(),
     )
-    defaults.update(overrides)
-    return ConnectionRecord(**defaults)
 
 
 def _make_detector(**kw):
