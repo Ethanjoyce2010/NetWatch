@@ -171,6 +171,7 @@ class Reporter:
         fields = [
             ("Executable", inv.exe_path),
             ("Exists on disk", inv.exe_exists_on_disk),
+            ("Signature", inv.exe_signed),
             ("Command line", inv.cmdline),
             ("User", inv.username),
             ("Working dir", inv.cwd),

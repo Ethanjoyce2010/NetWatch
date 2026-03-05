@@ -77,6 +77,61 @@ except (OSError, AttributeError):
     _WINAPI_AVAILABLE = False
     logger.info("Windows API not available — DLL inspection disabled on this platform.")
 
+# ======================================================================
+# Authenticode signature verification via WinVerifyTrust
+# ======================================================================
+
+try:
+    _wintrust = ctypes.WinDLL("wintrust", use_last_error=True)
+
+    # GUID for WINTRUST_ACTION_GENERIC_VERIFY_V2
+    class _GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", ctypes.wintypes.DWORD),
+            ("Data2", ctypes.wintypes.WORD),
+            ("Data3", ctypes.wintypes.WORD),
+            ("Data4", ctypes.c_byte * 8),
+        ]
+
+    _WINTRUST_ACTION_VERIFY = _GUID(
+        0x00AAC56B, 0xCD44, 0x11D0,
+        (ctypes.c_byte * 8)(0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE)
+    )
+
+    class _WINTRUST_FILE_INFO(ctypes.Structure):
+        _fields_ = [
+            ("cbStruct", ctypes.wintypes.DWORD),
+            ("pcwszFilePath", ctypes.wintypes.LPCWSTR),
+            ("hFile", ctypes.wintypes.HANDLE),
+            ("pgKnownSubject", ctypes.c_void_p),
+        ]
+
+    class _WINTRUST_DATA(ctypes.Structure):
+        _fields_ = [
+            ("cbStruct", ctypes.wintypes.DWORD),
+            ("pPolicyCallbackData", ctypes.c_void_p),
+            ("pSIPClientData", ctypes.c_void_p),
+            ("dwUIChoice", ctypes.wintypes.DWORD),
+            ("fdwRevocationChecks", ctypes.wintypes.DWORD),
+            ("dwUnionChoice", ctypes.wintypes.DWORD),
+            ("pFile", ctypes.POINTER(_WINTRUST_FILE_INFO)),
+            ("dwStateAction", ctypes.wintypes.DWORD),
+            ("hWVTStateData", ctypes.wintypes.HANDLE),
+            ("pwszURLReference", ctypes.wintypes.LPCWSTR),
+            ("dwProvFlags", ctypes.wintypes.DWORD),
+            ("dwUIContext", ctypes.wintypes.DWORD),
+            ("pSignatureSettings", ctypes.c_void_p),
+        ]
+
+    _WinVerifyTrust = _wintrust.WinVerifyTrust
+    _WinVerifyTrust.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(_GUID), ctypes.c_void_p]
+    _WinVerifyTrust.restype = ctypes.wintypes.LONG
+
+    _WINTRUST_AVAILABLE = True
+except (OSError, AttributeError):
+    _WINTRUST_AVAILABLE = False
+    logger.debug("WinTrust API not available — signature verification disabled.")
+
 
 # ======================================================================
 # Suspicious indicators
@@ -193,6 +248,8 @@ class DLLInspector:
         self.threat_intel = threat_intel or get_threat_intel()
         # Merge extended definitions from threat intel
         self._all_suspicious_dlls = KNOWN_SUSPICIOUS_DLLS | self.threat_intel.get_suspicious_dlls()
+        # Signature verification cache: path → is_signed
+        self._sig_cache: dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -369,6 +426,13 @@ class DLLInspector:
                 if not self._is_app_module_dir(directory, process_dir):
                     reasons.append(f"random-looking filename (entropy={self._filename_entropy(stem):.2f})")
 
+        # 5b. Authenticode signature check (non-system, non-runtime DLLs)
+        if mod.exists_on_disk and not self._is_system_dir(directory):
+            if not self._is_runtime_dir(directory):
+                signed = self._verify_signature(mod.path)
+                if signed is False:
+                    reasons.append("DLL is not Authenticode signed or has an invalid signature")
+
         # 6. Loaded into a "tight" process that shouldn't have extra DLLs
         if process_name in TIGHT_PROCESSES:
             allowed = TIGHT_PROCESSES[process_name]
@@ -409,6 +473,67 @@ class DLLInspector:
         d = directory.lower()
         return any(d.startswith(sd) for sd in SYSTEM_DIRS)
 
+    def _verify_signature(self, file_path: str) -> Optional[bool]:
+        """Check whether a file has a valid Authenticode signature.
+
+        Returns True (signed+valid), False (unsigned/invalid), or None (unavailable).
+        Results are cached per file path.
+        """
+        if not _WINTRUST_AVAILABLE:
+            return None
+
+        path_lower = file_path.lower()
+        if path_lower in self._sig_cache:
+            return self._sig_cache[path_lower]
+
+        try:
+            file_info = _WINTRUST_FILE_INFO()
+            file_info.cbStruct = ctypes.sizeof(_WINTRUST_FILE_INFO)
+            file_info.pcwszFilePath = file_path
+            file_info.hFile = None
+            file_info.pgKnownSubject = None
+
+            trust_data = _WINTRUST_DATA()
+            trust_data.cbStruct = ctypes.sizeof(_WINTRUST_DATA)
+            trust_data.pPolicyCallbackData = None
+            trust_data.pSIPClientData = None
+            trust_data.dwUIChoice = 2  # WTD_UI_NONE
+            trust_data.fdwRevocationChecks = 0  # WTD_REVOKE_NONE
+            trust_data.dwUnionChoice = 1  # WTD_CHOICE_FILE
+            trust_data.pFile = ctypes.pointer(file_info)
+            trust_data.dwStateAction = 0  # WTD_STATEACTION_IGNORE
+            trust_data.hWVTStateData = None
+            trust_data.pwszURLReference = None
+            trust_data.dwProvFlags = 0x00000010  # WTD_USE_DEFAULT_OSVER_CHECK
+            trust_data.dwUIContext = 0
+
+            guid = _WINTRUST_ACTION_VERIFY
+            result = _WinVerifyTrust(
+                None,  # INVALID_HANDLE_VALUE for desktop
+                ctypes.byref(guid),
+                ctypes.byref(trust_data),
+            )
+
+            is_signed = (result == 0)
+            self._sig_cache[path_lower] = is_signed
+            return is_signed
+        except Exception:
+            logger.debug("Signature check failed for %s", file_path, exc_info=True)
+            self._sig_cache[path_lower] = None
+            return None
+
+    @staticmethod
+    def verify_signature_static(file_path: str) -> Optional[bool]:
+        """Static convenience method for signature verification (e.g. from investigator).
+
+        Creates a temporary inspector instance with caching disabled.
+        """
+        if not _WINTRUST_AVAILABLE:
+            return None
+        inspector = DLLInspector.__new__(DLLInspector)
+        inspector._sig_cache = {}
+        return inspector._verify_signature(file_path)
+
     @staticmethod
     def _severity_from_reasons(reasons: list[str]) -> Severity:
         """Pick the highest severity based on the reason strings."""
@@ -417,6 +542,8 @@ class DLLInspector:
             return Severity.CRITICAL
         if "not found on disk" in text or "reflective" in text:
             return Severity.CRITICAL
+        if "not authenticode signed" in text or "invalid signature" in text:
+            return Severity.MEDIUM
         if "known suspicious" in text or "known malicious" in text or "unexpected dll" in text:
             return Severity.HIGH
         if "side-load" in text or "suspicious directory" in text:

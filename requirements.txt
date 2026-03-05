@@ -1,2 +1,4 @@
 psutil>=5.9.0
 fpdf2>=2.7.0
+geoip2>=4.8.0
+tomli>=2.0.0; python_version < "3.11"

@@ -93,6 +93,20 @@ class ProcessInvestigator:
         if inv.exe_path:
             inv.exe_exists_on_disk = Path(inv.exe_path).exists()
 
+        # Check Authenticode signature
+        if inv.exe_path and inv.exe_exists_on_disk:
+            try:
+                from .dll_inspector import DLLInspector
+                sig_result = DLLInspector.verify_signature_static(inv.exe_path)
+                if sig_result is True:
+                    inv.exe_signed = "signed"
+                elif sig_result is False:
+                    inv.exe_signed = "unsigned"
+                else:
+                    inv.exe_signed = "unknown"
+            except Exception:
+                inv.exe_signed = "unknown"
+
         # Suspicious env vars
         self._safe(lambda: self._check_env(proc, inv))
 

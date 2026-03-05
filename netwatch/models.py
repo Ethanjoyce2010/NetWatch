@@ -38,6 +38,10 @@ class ConnectionRecord:
     exe_path: Optional[str] = None
     cmdline: Optional[str] = None
     username: Optional[str] = None
+    # GeoIP enrichment (populated by GeoIPEnricher)
+    geo_country: Optional[str] = None       # e.g. "US"
+    geo_country_name: Optional[str] = None  # e.g. "United States"
+    geo_asn: Optional[str] = None           # e.g. "AS13335 Cloudflare"
 
 
 @dataclass

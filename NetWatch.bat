@@ -45,8 +45,8 @@ echo   ^|  \^| ^|/ _ \ __\ \ /\ / / _` ^| __/ __^| '_ \
 echo   ^| ^|\  ^|  __/ ^|_ \ V  V / (_^| ^| ^|^| (__^| ^| ^| ^|
 echo   ^|_^| \_^|\___^|\__^| \_/\_/ \__,_^|\__\___^|_^| ^|_^|
 echo.
-echo    Network Traffic Anomaly Detector  v2.3.0
-echo    Threat Intelligence Enhanced
+echo    Network Traffic Anomaly Detector  v3.0.0
+echo    Threat Intelligence Enhanced ^| GeoIP ^| Notifications
 echo   ============================================================
 echo.
 echo     [1]  Quick Snapshot           - scan now and show results
@@ -61,14 +61,17 @@ echo     [9]  Update Threat Feeds      - download latest C2 IP/domain blocklists
 echo     [S]  Feed Status              - show threat intel feed info
 echo     [H]  Hash Lookup              - check SHA256 against MalwareBazaar
 echo     [P]  PDF Report               - snapshot + generate PDF report
+echo     [W]  HTML Report              - snapshot + generate interactive HTML report
 echo     [T]  Top Talkers + Stats      - top processes and network stats
 echo     [C]  CSV Export               - export snapshot to CSV files
+echo     [N]  Notify Test              - test notification channels
+echo     [G]  Full Report Bundle       - PDF + HTML + CSV in one go
 echo.
 echo     [0]  Exit
 echo.
 echo   ============================================================
 echo.
-set /p "CHOICE=  Select an option [0-9/S/H/P/T/C]: "
+set /p "CHOICE=  Select an option [0-9/S/H/P/W/T/C/N/G]: "
 
 if "%CHOICE%"=="1" goto SNAPSHOT
 if "%CHOICE%"=="2" goto LIVE
@@ -82,8 +85,11 @@ if "%CHOICE%"=="9" goto UPDATE_FEEDS
 if /i "%CHOICE%"=="S" goto FEED_STATUS
 if /i "%CHOICE%"=="H" goto HASH_LOOKUP
 if /i "%CHOICE%"=="P" goto PDF_REPORT
+if /i "%CHOICE%"=="W" goto HTML_REPORT
 if /i "%CHOICE%"=="T" goto TOP_STATS
 if /i "%CHOICE%"=="C" goto CSV_EXPORT
+if /i "%CHOICE%"=="N" goto NOTIFY_TEST
+if /i "%CHOICE%"=="G" goto FULL_BUNDLE
 if "%CHOICE%"=="0" goto EXIT
 
 echo.
@@ -294,6 +300,60 @@ echo.
 echo   Running snapshot and exporting to CSV...
 echo.
 "%PYTHON%" -m netwatch --snapshot --export-csv "%CSVFILE%" --export-connections-csv "%CSVCONN%"
+echo.
+pause
+goto MENU
+
+:: -- W. HTML Report ---------------------------------------------------
+:HTML_REPORT
+cls
+set "HTMLFILE=%SCRIPT_DIR%NetWatch_Report_%date:~-4%%date:~4,2%%date:~7,2%_%time:~0,2%%time:~3,2%%time:~6,2%.html"
+set "HTMLFILE=%HTMLFILE: =0%"
+echo.
+echo   Generating interactive HTML security report...
+echo   Output: %HTMLFILE%
+echo.
+"%PYTHON%" -m netwatch --snapshot --html "%HTMLFILE%" --stats
+echo.
+pause
+goto MENU
+
+:: -- N. Notify Test ---------------------------------------------------
+:NOTIFY_TEST
+cls
+echo.
+echo   Running snapshot with notifications enabled...
+set /p "WEBHOOK=  Enter Discord or Slack webhook URL: "
+if "%WEBHOOK%"=="" (
+    echo   No webhook entered.
+    timeout /t 2 >nul
+    goto MENU
+)
+echo.
+"%PYTHON%" -m netwatch --snapshot --discord-webhook %WEBHOOK% --notify-min-severity LOW
+echo.
+pause
+goto MENU
+
+:: -- G. Full Report Bundle -------------------------------------------
+:FULL_BUNDLE
+cls
+set "TS=%date:~-4%%date:~4,2%%date:~7,2%_%time:~0,2%%time:~3,2%%time:~6,2%"
+set "TS=%TS: =0%"
+set "PDFFILE=%SCRIPT_DIR%NetWatch_Report_%TS%.pdf"
+set "HTMLFILE=%SCRIPT_DIR%NetWatch_Report_%TS%.html"
+set "CSVFILE=%SCRIPT_DIR%netwatch_alerts_%TS%.csv"
+set "CSVCONN=%SCRIPT_DIR%netwatch_connections_%TS%.csv"
+echo.
+echo   Generating full report bundle (PDF + HTML + CSV)...
+echo.
+"%PYTHON%" -m netwatch --snapshot --pdf "%PDFFILE%" --html "%HTMLFILE%" --export-csv "%CSVFILE%" --export-connections-csv "%CSVCONN%" --stats
+echo.
+echo   Reports saved:
+echo     PDF:  %PDFFILE%
+echo     HTML: %HTMLFILE%
+echo     CSV:  %CSVFILE%
+echo     CSV:  %CSVCONN%
 echo.
 pause
 goto MENU

@@ -18,6 +18,7 @@ Rules:
   12. Process Masquerading
   13. DNS Exfiltration Suspect
   14. Crypto Mining Detected
+  15. Lateral Movement Detected
 """
 
 from __future__ import annotations
@@ -157,6 +158,31 @@ CRYPTO_MINING_PORTS: set[int] = {
 BEACON_MIN_INTERVALS = 5       # Need at least 5 intervals to detect
 BEACON_JITTER_TOLERANCE = 0.20  # Allow 20% jitter
 
+# Lateral movement indicators — connections between internal hosts
+# on admin / remote-management ports
+LATERAL_MOVEMENT_PORTS: dict[int, str] = {
+    445:  "SMB",
+    3389: "RDP",
+    5985: "WinRM-HTTP",
+    5986: "WinRM-HTTPS",
+    135:  "WMI/DCOM/RPC",
+    139:  "NetBIOS",
+    22:   "SSH",
+    23:   "Telnet",
+    5900: "VNC",
+    5901: "VNC",
+}
+
+# Process names associated with lateral movement tooling
+LATERAL_MOVEMENT_TOOLS: set[str] = {
+    "psexec.exe", "psexesvc.exe",
+    "wmic.exe", "wmiprvse.exe",
+    "winrs.exe", "wsmprovhost.exe",
+    "mstsc.exe",
+    "smbclient", "net.exe", "net1.exe",
+    "ssh.exe", "putty.exe", "plink.exe",
+}
+
 
 class AnomalyDetector:
     """Stateful anomaly detector — accumulates process profiles over time."""
@@ -215,12 +241,13 @@ class AnomalyDetector:
             alerts.extend(self._check_external_listener(rec, profile))
             alerts.extend(self._check_long_lived_to_rare_port(rec, profile))
 
-            # New rules (10-14)
+            # New rules (10-15)
             alerts.extend(self._check_known_c2_ip(rec, profile))
             alerts.extend(self._check_beaconing(rec, profile))
             alerts.extend(self._check_process_masquerade(rec, profile))
             alerts.extend(self._check_dns_exfiltration(rec, profile))
             alerts.extend(self._check_crypto_mining(rec, profile))
+            alerts.extend(self._check_lateral_movement(rec, profile))
 
         return alerts
 
@@ -263,6 +290,19 @@ class AnomalyDetector:
         profile.connection_timestamps = [
             t for t in profile.connection_timestamps if t > cutoff
         ]
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_private_ip(addr: str) -> bool:
+        """Return True if the address is in a private / loopback range."""
+        try:
+            a = ip_address(addr)
+            return any(a in net for net in PRIVATE_NETWORKS)
+        except (ValueError, TypeError):
+            return False
 
     # ------------------------------------------------------------------
     # Detection rules
@@ -425,11 +465,7 @@ class AnomalyDetector:
     def _check_long_lived_to_rare_port(self, rec: ConnectionRecord, profile: ProcessProfile) -> list[Alert]:
         if rec.status == "ESTABLISHED" and rec.remote_port and rec.remote_port > 49152:
             # Only flag if the remote host is external
-            try:
-                addr = ip_address(rec.remote_addr)
-                if any(addr in net for net in PRIVATE_NETWORKS):
-                    return []
-            except ValueError:
+            if self._is_private_ip(rec.remote_addr):
                 return []
 
             return self._emit(
@@ -476,11 +512,7 @@ class AnomalyDetector:
             return []
 
         # Skip private IPs
-        try:
-            addr = ip_address(rec.remote_addr)
-            if any(addr in net for net in PRIVATE_NETWORKS):
-                return []
-        except ValueError:
+        if self._is_private_ip(rec.remote_addr):
             return []
 
         key = (rec.remote_addr, rec.remote_port)
@@ -539,9 +571,7 @@ class AnomalyDetector:
 
         # Also flag LOLBin usage with outbound connections
         if name_lower in LOLBINS and rec.remote_addr:
-            try:
-                addr = ip_address(rec.remote_addr)
-                if not any(addr in net for net in PRIVATE_NETWORKS):
+            if not self._is_private_ip(rec.remote_addr):
                     return self._emit(
                         f"lolbin:{rec.pid}",
                         "LOLBin Network Activity",
@@ -555,8 +585,6 @@ class AnomalyDetector:
                             "exe_path": rec.exe_path,
                         },
                     )
-            except ValueError:
-                pass
 
         # Check process masquerading (name vs expected directory)
         if not rec.exe_path:
@@ -589,29 +617,24 @@ class AnomalyDetector:
 
         # DNS to a non-standard (external) server is suspicious
         # Most systems use local or ISP DNS; connecting to random port 53 is odd
-        if rec.remote_addr:
-            try:
-                addr = ip_address(rec.remote_addr)
-                if not any(addr in net for net in PRIVATE_NETWORKS):
-                    # Only flag if the process is not a known DNS client
-                    name_lower = rec.process_name.lower()
-                    dns_procs = {"svchost.exe", "dns.exe", "dnscache", "systemd-resolved",
-                                 "dnsmasq", "unbound", "named", "coredns"}
-                    if name_lower not in dns_procs:
-                        return self._emit(
-                            f"dns_exfil:{rec.pid}:{rec.remote_addr}",
-                            "DNS Exfiltration Suspect",
-                            Severity.MEDIUM,
-                            f"'{rec.process_name}' directly querying external DNS "
-                            f"{rec.remote_addr} — possible data exfiltration via DNS",
-                            rec,
-                            {
-                                "remote_addr": rec.remote_addr,
-                                "process": rec.process_name,
-                            },
-                        )
-            except ValueError:
-                pass
+        if rec.remote_addr and not self._is_private_ip(rec.remote_addr):
+            # Only flag if the process is not a known DNS client
+            name_lower = rec.process_name.lower()
+            dns_procs = {"svchost.exe", "dns.exe", "dnscache", "systemd-resolved",
+                         "dnsmasq", "unbound", "named", "coredns"}
+            if name_lower not in dns_procs:
+                return self._emit(
+                    f"dns_exfil:{rec.pid}:{rec.remote_addr}",
+                    "DNS Exfiltration Suspect",
+                    Severity.MEDIUM,
+                    f"'{rec.process_name}' directly querying external DNS "
+                    f"{rec.remote_addr} — possible data exfiltration via DNS",
+                    rec,
+                    {
+                        "remote_addr": rec.remote_addr,
+                        "process": rec.process_name,
+                    },
+                )
         return []
 
     # 14. Crypto mining detection — connections to known mining pool ports
@@ -621,11 +644,7 @@ class AnomalyDetector:
 
         # Only flag if connection is to an external IP
         if rec.remote_addr:
-            try:
-                addr = ip_address(rec.remote_addr)
-                if any(addr in net for net in PRIVATE_NETWORKS):
-                    return []
-            except ValueError:
+            if self._is_private_ip(rec.remote_addr):
                 return []
 
             # Only fire if not already flagged by suspicious port rule
@@ -647,3 +666,66 @@ class AnomalyDetector:
                     },
                 )
         return []
+
+    # 15. Lateral movement — internal-to-internal connections on admin ports
+    def _check_lateral_movement(self, rec: ConnectionRecord, profile: ProcessProfile) -> list[Alert]:
+        if not rec.remote_addr or not rec.remote_port:
+            return []
+        if rec.remote_port not in LATERAL_MOVEMENT_PORTS:
+            return []
+        if rec.status not in ("ESTABLISHED", "SYN_SENT"):
+            return []
+
+        # Only trigger for private→private (internal lateral movement)
+        if not self._is_private_ip(rec.remote_addr):
+            return []
+
+        proto = LATERAL_MOVEMENT_PORTS[rec.remote_port]
+        name_lower = rec.process_name.lower()
+
+        # Track distinct lateral targets per PID for escalation
+        lateral_key = f"lateral_targets:{rec.pid}"
+        if lateral_key not in self._fired:
+            self._fired.add(lateral_key)  # placeholder to init tracking
+
+        # Determine severity based on context
+        # Check if this PID has contacted multiple internal hosts on lateral ports
+        lateral_targets = set()
+        for entry in self._beacon_history.get(rec.pid, []):
+            if entry[2] in LATERAL_MOVEMENT_PORTS and self._is_private_ip(entry[1]):
+                lateral_targets.add(entry[1])
+        lateral_targets.add(rec.remote_addr)
+
+        if len(lateral_targets) >= 3:
+            severity = Severity.CRITICAL
+            desc = (
+                f"'{rec.process_name}' contacted {len(lateral_targets)} internal hosts "
+                f"on admin ports — possible automated lateral movement"
+            )
+        elif name_lower in LATERAL_MOVEMENT_TOOLS:
+            severity = Severity.HIGH
+            desc = (
+                f"Lateral movement tool '{rec.process_name}' connected to "
+                f"{rec.remote_addr}:{rec.remote_port} ({proto})"
+            )
+        else:
+            severity = Severity.MEDIUM
+            desc = (
+                f"'{rec.process_name}' connected to internal host "
+                f"{rec.remote_addr} on {proto} port {rec.remote_port}"
+            )
+
+        return self._emit(
+            f"lateral:{rec.pid}:{rec.remote_addr}:{rec.remote_port}",
+            "Lateral Movement Detected",
+            severity,
+            desc,
+            rec,
+            {
+                "remote_addr": rec.remote_addr,
+                "remote_port": rec.remote_port,
+                "protocol_name": proto,
+                "is_known_tool": name_lower in LATERAL_MOVEMENT_TOOLS,
+                "internal_targets": len(lateral_targets),
+            },
+        )

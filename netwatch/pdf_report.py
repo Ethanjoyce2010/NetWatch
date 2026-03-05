@@ -493,6 +493,7 @@ class PDFReportGenerator:
             fields = [
                 ("Executable", inv.exe_path),
                 ("Exists on disk", "Yes" if inv.exe_exists_on_disk else "No" if inv.exe_exists_on_disk is not None else "Unknown"),
+                ("Signature", inv.exe_signed if inv.exe_signed else "Unknown"),
                 ("Command line", (inv.cmdline or "")[:100]),
                 ("User", inv.username),
                 ("Status", inv.status),

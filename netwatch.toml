@@ -1,0 +1,40 @@
+# NetWatch Configuration File
+# All values below are the defaults. Uncomment and edit to customise.
+
+[monitor]
+# poll_interval = 2.0        # Seconds between polling snapshots
+# duration = 0               # Run for N seconds then stop (0 = indefinite)
+
+[detector]
+# connection_rate_threshold = 80    # Connections per window to trigger alert
+# rate_window_seconds = 60.0        # Window size for rate detection
+# min_unique_ips_for_scan_alert = 30  # Unique IPs before IP-scan alert
+# port_scan_unique_ports = 20       # Unique ports before port-scan alert
+# beacon_min_intervals = 5          # Minimum intervals for beaconing detection
+# beacon_jitter_tolerance = 0.20    # Max coefficient of variation for beaconing
+# min_risk_score = 10               # Minimum risk score to show in summary
+
+[feeds]
+# cache_max_age_seconds = 3600      # Feed cache lifetime (1 hour)
+# api_key = ""                      # abuse.ch API key for MalwareBazaar
+
+[notifications]
+# discord_webhook = ""              # Discord webhook URL
+# slack_webhook = ""                # Slack webhook URL
+# email_to = ""                     # Notification email recipient
+# email_smtp = ""                   # SMTP server hostname
+# email_port = 587                  # SMTP port
+# email_user = ""                   # SMTP username
+# email_password = ""               # SMTP password
+# email_from = "netwatch@localhost" # From address
+# min_severity = "HIGH"             # Minimum severity to notify (HIGH or CRITICAL)
+# cooldown_seconds = 300            # Seconds before re-notifying same alert
+
+[geoip]
+# db_path = ""                      # Path to GeoLite2-Country.mmdb
+# license_key = ""                  # MaxMind license key (for auto-download)
+
+[reporting]
+# pdf_output = ""                   # Auto-generate PDF to this path
+# html_output = ""                  # Auto-generate HTML report to this path
+# csv_output = ""                   # Auto-export alerts CSV to this path

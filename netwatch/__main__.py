@@ -23,11 +23,15 @@ from .dll_inspector import DLLInspector
 from .investigator import ProcessInvestigator
 from .monitor import TrafficMonitor
 from .pdf_report import PDFReportGenerator
+from .html_report import HTMLReportGenerator
 from .reporter import Reporter
 from .threat_intel import ThreatIntelManager
 from .whitelist import ProcessWhitelist
 from .stats import compute_stats, print_stats
 from .csv_export import export_alerts_csv, export_connections_csv
+from .config import load_config
+from .geoip import GeoIPEnricher
+from .notifier import Notifier
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -131,6 +135,48 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Export raw connection records to CSV file",
     )
     p.add_argument(
+        "--html",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Generate an HTML report (combine with --snapshot or --dll-scan)",
+    )
+    p.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Path to netwatch.toml configuration file",
+    )
+    p.add_argument(
+        "--discord-webhook",
+        type=str,
+        default=None,
+        metavar="URL",
+        help="Discord webhook URL for real-time notifications",
+    )
+    p.add_argument(
+        "--slack-webhook",
+        type=str,
+        default=None,
+        metavar="URL",
+        help="Slack webhook URL for real-time notifications",
+    )
+    p.add_argument(
+        "--notify-min-severity",
+        type=str,
+        default=None,
+        choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+        help="Minimum severity to trigger notifications (default: HIGH)",
+    )
+    p.add_argument(
+        "--geoip-db",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to GeoLite2 database file or directory",
+    )
+    p.add_argument(
         "--top",
         type=int,
         default=None,
@@ -167,8 +213,8 @@ BANNER = r"""
  | |\  |  __/ |_ \  /\  / (_| | || (__| | | |
  |_| \_|\___|\__| \/  \/ \__,_|\__\___|_| |_|
                                              
-  Network Traffic Anomaly Detector  v2.3.0
-  Threat Intelligence Enhanced
+  Network Traffic Anomaly Detector  v3.0.0
+  Threat Intelligence Enhanced | GeoIP | Notifications
 """
 
 
@@ -193,13 +239,66 @@ def main() -> None:
 
     print(BANNER)
 
+    # ---- Load configuration ----
+    cfg = load_config(args.config)
+
+    # CLI overrides for config values
+    if args.interval != 2.0:
+        cfg.monitor.poll_interval = args.interval
+    if args.duration != 0:
+        cfg.monitor.duration = args.duration
+    if args.min_risk != 10:
+        cfg.detector.min_risk_score = args.min_risk
+    if args.api_key:
+        cfg.feeds.api_key = args.api_key
+    if args.discord_webhook:
+        cfg.notifications.discord_webhook = args.discord_webhook
+    if args.slack_webhook:
+        cfg.notifications.slack_webhook = args.slack_webhook
+    if args.notify_min_severity:
+        cfg.notifications.min_severity = args.notify_min_severity
+    if args.geoip_db:
+        cfg.geoip.db_path = args.geoip_db
+    if args.pdf:
+        cfg.reporting.pdf_output = args.pdf
+    if args.html:
+        cfg.reporting.html_output = args.html
+
     # ---- Initialize threat intel ----
-    threat_intel = ThreatIntelManager(api_key=args.api_key)
+    threat_intel = ThreatIntelManager(api_key=cfg.feeds.api_key or args.api_key)
 
     # ---- Initialize whitelist ----
     whitelist = ProcessWhitelist(path=args.whitelist)
     if whitelist.loaded:
         print(f"  {whitelist.summary()}\n")
+
+    # ---- Initialize GeoIP enricher ----
+    geoip = GeoIPEnricher(db_path=cfg.geoip.db_path or None)
+    if geoip.available:
+        print("  [+] GeoIP enrichment enabled.\n")
+
+    # ---- Initialize notifier ----
+    notifier = Notifier(
+        discord_webhook=cfg.notifications.discord_webhook,
+        slack_webhook=cfg.notifications.slack_webhook,
+        email_to=cfg.notifications.email_to,
+        email_smtp=cfg.notifications.email_smtp,
+        email_port=cfg.notifications.email_port,
+        email_user=cfg.notifications.email_user,
+        email_password=cfg.notifications.email_password,
+        email_from=cfg.notifications.email_from,
+        min_severity=cfg.notifications.min_severity,
+        cooldown_seconds=cfg.notifications.cooldown_seconds,
+    )
+    if notifier.enabled:
+        channels = []
+        if cfg.notifications.discord_webhook:
+            channels.append("Discord")
+        if cfg.notifications.slack_webhook:
+            channels.append("Slack")
+        if cfg.notifications.email_to:
+            channels.append("Email")
+        print(f"  [+] Notifications enabled: {', '.join(channels)}\n")
 
     # ---- Feed management modes ----
     if args.update_feeds:
@@ -270,11 +369,12 @@ def main() -> None:
         dll_results=None, duration=None, connections=0,
         network_stats=None,
     ):
-        if not args.pdf:
+        pdf_path = cfg.reporting.pdf_output or args.pdf
+        if not pdf_path:
             return
         gen = PDFReportGenerator()
         path = gen.generate(
-            args.pdf,
+            pdf_path,
             alerts=alerts or [],
             profiles=profiles or [],
             investigations=investigations,
@@ -286,6 +386,29 @@ def main() -> None:
         )
         print(f"\n  [PDF] Report saved: {path}\n")
 
+    # ---- HTML report helper ----
+    def _maybe_html(
+        alerts=None, profiles=None, investigations=None,
+        dll_results=None, duration=None, connections=0,
+        network_stats=None,
+    ):
+        html_path = cfg.reporting.html_output or args.html
+        if not html_path:
+            return
+        gen = HTMLReportGenerator()
+        path = gen.generate(
+            html_path,
+            alerts=alerts or [],
+            profiles=profiles or [],
+            investigations=investigations,
+            dll_results=dll_results,
+            feed_status=threat_intel.get_feed_status(),
+            scan_duration=duration,
+            connection_count=connections,
+            network_stats=network_stats,
+        )
+        print(f"\n  [HTML] Report saved: {path}\n")
+
     # ---- DLL scan mode ----
     if args.dll_scan or args.dll_scan_pid is not None:
         dll_inspector = DLLInspector(threat_intel=threat_intel)
@@ -296,6 +419,7 @@ def main() -> None:
             if result:
                 reporter.print_dll_scan([result])
                 _maybe_pdf(dll_results=[result] if result.is_suspicious else None)
+                _maybe_html(dll_results=[result] if result.is_suspicious else None)
             else:
                 print(f"  Could not scan PID {args.dll_scan_pid} (not found or access denied).\n")
         else:
@@ -303,6 +427,7 @@ def main() -> None:
             results = dll_inspector.scan_all()
             reporter.print_dll_scan(results)
             _maybe_pdf(dll_results=results or None)
+            _maybe_html(dll_results=results or None)
         reporter.close()
         return
 
@@ -318,8 +443,15 @@ def main() -> None:
         return
 
     # ---- Monitor / snapshot mode ----
-    monitor = TrafficMonitor(poll_interval=args.interval)
-    detector = AnomalyDetector(threat_intel=threat_intel, whitelist=whitelist)
+    monitor = TrafficMonitor(poll_interval=cfg.monitor.poll_interval)
+    detector = AnomalyDetector(
+        threat_intel=threat_intel,
+        whitelist=whitelist,
+        connection_rate_threshold=cfg.detector.connection_rate_threshold,
+        rate_window_seconds=cfg.detector.rate_window_seconds,
+        min_unique_ips_for_scan_alert=cfg.detector.min_unique_ips_for_scan_alert,
+        port_scan_unique_ports=cfg.detector.port_scan_unique_ports,
+    )
     reporter = Reporter(log_file=args.log)
     investigator = ProcessInvestigator()
 
@@ -342,10 +474,16 @@ def main() -> None:
         # Single-shot mode
         print("  Taking snapshot...\n")
         records = monitor.snapshot()
+
+        # Enrich records with GeoIP data
+        for rec in records:
+            geoip.enrich_record(rec)
+
         alerts = detector.analyse(records)
         total_alerts += len(alerts)
         reporter.report_alerts(alerts)
-        risky = detector.get_risky_profiles(args.min_risk)
+        notifier.send(alerts)
+        risky = detector.get_risky_profiles(cfg.detector.min_risk_score)
         reporter.print_summary(risky)
 
         # --top: show top-N talkers
@@ -412,16 +550,29 @@ def main() -> None:
             connections=len(records),
             network_stats=snap_stats_dict,
         )
+        _maybe_html(
+            alerts=alerts,
+            profiles=list(detector.profiles.values()),
+            investigations=investigations or None,
+            dll_results=dll_results_list or None,
+            duration=elapsed,
+            connections=len(records),
+            network_stats=snap_stats_dict,
+        )
         reporter.close()
         return
 
     # Continuous monitoring
-    print(f"  Monitoring every {args.interval}s — press Ctrl+C to stop.\n")
+    print(f"  Monitoring every {cfg.monitor.poll_interval}s — press Ctrl+C to stop.\n")
 
     try:
         for records in monitor.stream():
             if not running:
                 break
+
+            # Enrich records with GeoIP data
+            for rec in records:
+                geoip.enrich_record(rec)
 
             alerts = detector.analyse(records)
             total_alerts += len(alerts)
@@ -429,6 +580,7 @@ def main() -> None:
             if alerts:
                 print()  # newline before alerts
                 reporter.report_alerts(alerts)
+                notifier.send(alerts)
 
             elapsed = time.time() - start_time
             reporter.print_status(
@@ -441,7 +593,7 @@ def main() -> None:
         pass
 
     # Final summary
-    risky = detector.get_risky_profiles(args.min_risk)
+    risky = detector.get_risky_profiles(cfg.detector.min_risk_score)
     reporter.print_summary(risky)
 
     investigations = []
@@ -462,6 +614,13 @@ def main() -> None:
         print(f"  [CSV] Alerts exported: {csv_path}\n")
 
     _maybe_pdf(
+        alerts=all_alerts,
+        profiles=list(detector.profiles.values()),
+        investigations=investigations or None,
+        duration=elapsed,
+        connections=total_alerts,  # approximate
+    )
+    _maybe_html(
         alerts=all_alerts,
         profiles=list(detector.profiles.values()),
         investigations=investigations or None,
