@@ -249,3 +249,12 @@ See the included `netwatch.toml` sample for all available settings.
 pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
+
+## TODOS
+- [ ] Add unit tests for `reporter.py` and `csv_export.py`
+- [ ] Add more malware family descriptions to the built-in database
+- [ ] Implement a "learning mode" to auto-whitelist common processes and connections in a specific environment
+- [ ] Add support for additional threat intelligence feeds (AlienVault OTX, VirusTotal, etc.)
+- [ ] Implement a "kill switch" to automatically terminate processes that trigger critical alerts (with user confirmation)
+- [ ] Add a "quarantine" feature to move suspicious executables to a safe location
+- [ ] Add support to scan task scheduler entries for persistence mechanisms
