@@ -66,12 +66,20 @@ echo     [T]  Top Talkers + Stats      - top processes and network stats
 echo     [C]  CSV Export               - export snapshot to CSV files
 echo     [N]  Notify Test              - test notification channels
 echo     [G]  Full Report Bundle       - PDF + HTML + CSV in one go
+echo     [M]  Network Map              - snapshot + process/IP HTML map
+echo     [L]  Live Network Map         - auto-refreshing live process/IP map
+echo     [A]  Learning Mode            - generate whitelist suggestions
+echo     [R]  Task Scheduler Scan      - scan scheduled tasks for persistence
+echo     [K]  Kill Critical            - prompt to terminate critical processes
+echo     [Q]  Quarantine Critical      - prompt to quarantine critical executables
+echo     [O]  OTX Lookup / Import      - AlienVault OTX indicator tools
+echo     [V]  VirusTotal Lookup        - check IP/domain/hash reputation
 echo.
 echo     [0]  Exit
 echo.
 echo   ============================================================
 echo.
-set /p "CHOICE=  Select an option [0-9/S/H/P/W/T/C/N/G]: "
+set /p "CHOICE=  Select an option [0-9/S/H/P/W/T/C/N/G/M/L/A/R/K/Q/O/V]: "
 
 if "%CHOICE%"=="1" goto SNAPSHOT
 if "%CHOICE%"=="2" goto LIVE
@@ -90,6 +98,14 @@ if /i "%CHOICE%"=="T" goto TOP_STATS
 if /i "%CHOICE%"=="C" goto CSV_EXPORT
 if /i "%CHOICE%"=="N" goto NOTIFY_TEST
 if /i "%CHOICE%"=="G" goto FULL_BUNDLE
+if /i "%CHOICE%"=="M" goto NETWORK_MAP
+if /i "%CHOICE%"=="L" goto LIVE_MAP
+if /i "%CHOICE%"=="A" goto LEARNING_MODE
+if /i "%CHOICE%"=="R" goto TASK_SCAN
+if /i "%CHOICE%"=="K" goto KILL_CRITICAL
+if /i "%CHOICE%"=="Q" goto QUARANTINE_CRITICAL
+if /i "%CHOICE%"=="O" goto OTX_TOOLS
+if /i "%CHOICE%"=="V" goto VT_LOOKUP
 if "%CHOICE%"=="0" goto EXIT
 
 echo.
@@ -354,6 +370,161 @@ echo     PDF:  %PDFFILE%
 echo     HTML: %HTMLFILE%
 echo     CSV:  %CSVFILE%
 echo     CSV:  %CSVCONN%
+echo.
+pause
+goto MENU
+
+:: -- M. Network Map ---------------------------------------------------
+:NETWORK_MAP
+cls
+set "TS=%date:~-4%%date:~4,2%%date:~7,2%_%time:~0,2%%time:~3,2%%time:~6,2%"
+set "TS=%TS: =0%"
+set "MAPFILE=%SCRIPT_DIR%NetWatch_Map_%TS%.html"
+echo.
+echo   Generating process-to-endpoint network map...
+echo   Output: %MAPFILE%
+echo.
+"%PYTHON%" -m netwatch --snapshot --network-map "%MAPFILE%" --stats
+echo.
+pause
+goto MENU
+
+:: -- L. Live Network Map ---------------------------------------------
+:LIVE_MAP
+cls
+set "TS=%date:~-4%%date:~4,2%%date:~7,2%_%time:~0,2%%time:~3,2%%time:~6,2%"
+set "TS=%TS: =0%"
+set "MAPFILE=%SCRIPT_DIR%NetWatch_Live_Map_%TS%.html"
+set /p "DURATION=  How many seconds to monitor (default 60): "
+if "%DURATION%"=="" set "DURATION=60"
+set /p "INTERVAL=  Poll interval in seconds (default 2): "
+if "%INTERVAL%"=="" set "INTERVAL=2"
+set /p "REFRESH=  Browser refresh interval in seconds (default 3): "
+if "%REFRESH%"=="" set "REFRESH=3"
+echo.
+echo   Updating live network map for %DURATION% seconds...
+echo   Output: %MAPFILE%
+echo.
+"%PYTHON%" -m netwatch --interval %INTERVAL% --duration %DURATION% --live-map "%MAPFILE%" --map-refresh %REFRESH%
+echo.
+pause
+goto MENU
+
+:: -- A. Learning Mode -------------------------------------------------
+:LEARNING_MODE
+cls
+set "TS=%date:~-4%%date:~4,2%%date:~7,2%_%time:~0,2%%time:~3,2%%time:~6,2%"
+set "TS=%TS: =0%"
+set "LEARNFILE=%SCRIPT_DIR%learned_whitelist_%TS%.json"
+set /p "DURATION=  How many seconds to learn (default 60): "
+if "%DURATION%"=="" set "DURATION=60"
+set /p "MINCOUNT=  Minimum repeated alert count before learning (default 1): "
+if "%MINCOUNT%"=="" set "MINCOUNT=1"
+echo.
+echo   Learning low-risk whitelist suggestions...
+echo   Output: %LEARNFILE%
+echo.
+"%PYTHON%" -m netwatch --learning-mode "%LEARNFILE%" --learn-duration %DURATION% --learn-min-count %MINCOUNT%
+echo.
+pause
+goto MENU
+
+:: -- R. Task Scheduler Scan ------------------------------------------
+:TASK_SCAN
+cls
+echo.
+echo   Scanning Windows scheduled tasks for persistence indicators...
+echo.
+"%PYTHON%" -m netwatch --task-scan
+echo.
+pause
+goto MENU
+
+:: -- K. Kill Critical -------------------------------------------------
+:KILL_CRITICAL
+cls
+echo.
+echo   WARNING: This mode prompts before terminating any process that triggers
+echo   a CRITICAL alert. Only continue if you understand the risk.
+echo.
+set /p "CONFIRM=  Type RUN to continue: "
+if /i not "%CONFIRM%"=="RUN" goto MENU
+echo.
+"%PYTHON%" -m netwatch --snapshot --kill-critical
+echo.
+pause
+goto MENU
+
+:: -- Q. Quarantine Critical ------------------------------------------
+:QUARANTINE_CRITICAL
+cls
+set "QUARDIR=%SCRIPT_DIR%quarantine"
+echo.
+echo   WARNING: This mode prompts before moving suspicious executables into:
+echo   %QUARDIR%
+echo.
+set /p "CONFIRM=  Type RUN to continue: "
+if /i not "%CONFIRM%"=="RUN" goto MENU
+echo.
+"%PYTHON%" -m netwatch --snapshot --quarantine-critical "%QUARDIR%"
+echo.
+pause
+goto MENU
+
+:: -- O. AlienVault OTX Tools -----------------------------------------
+:OTX_TOOLS
+cls
+echo.
+echo   AlienVault OTX
+echo.
+echo     [1] Indicator lookup
+echo     [2] Import subscribed pulses
+echo     [0] Back
+echo.
+set /p "OTXCHOICE=  Select an option [0-2]: "
+if "%OTXCHOICE%"=="0" goto MENU
+set /p "OTXKEY=  Enter OTX API key (or press Enter to use OTX_API_KEY env var): "
+if "%OTXCHOICE%"=="1" (
+    set /p "INDICATOR=  Enter IP, domain, or hash: "
+    if "!INDICATOR!"=="" (
+        echo   No indicator entered.
+        timeout /t 2 >nul
+        goto MENU
+    )
+    if "!OTXKEY!"=="" (
+        "%PYTHON%" -m netwatch --otx-lookup "!INDICATOR!"
+    ) else (
+        "%PYTHON%" -m netwatch --otx-lookup "!INDICATOR!" --otx-api-key "!OTXKEY!"
+    )
+) else if "%OTXCHOICE%"=="2" (
+    if "!OTXKEY!"=="" (
+        "%PYTHON%" -m netwatch --update-otx-pulses
+    ) else (
+        "%PYTHON%" -m netwatch --update-otx-pulses --otx-api-key "!OTXKEY!"
+    )
+) else (
+    echo   Invalid choice.
+)
+echo.
+pause
+goto MENU
+
+:: -- V. VirusTotal Lookup --------------------------------------------
+:VT_LOOKUP
+cls
+set /p "VTKEY=  Enter VirusTotal API key (or press Enter to use VIRUSTOTAL_API_KEY env var): "
+set /p "INDICATOR=  Enter IP, domain, or hash: "
+if "%INDICATOR%"=="" (
+    echo   No indicator entered.
+    timeout /t 2 >nul
+    goto MENU
+)
+echo.
+if "%VTKEY%"=="" (
+    "%PYTHON%" -m netwatch --vt-lookup "%INDICATOR%"
+) else (
+    "%PYTHON%" -m netwatch --vt-lookup "%INDICATOR%" --vt-api-key "%VTKEY%"
+)
 echo.
 pause
 goto MENU
