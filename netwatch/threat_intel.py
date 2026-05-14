@@ -11,8 +11,10 @@ Static definitions (always available offline):
   - Known C2 IP ranges, malicious domains, suspicious DLL names,
     malware hash patterns, APT indicators
 
-Optional API lookups (requires free abuse.ch auth key):
+Optional API lookups:
   - MalwareBazaar:  SHA256 hash ↔ malware family lookup
+  - AlienVault OTX: IP/domain/hash pulse lookups and subscribed pulse import
+  - VirusTotal:     IP/domain/hash reputation lookups
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import ipaddress
 import json
 import logging
 import os
@@ -29,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -249,7 +253,61 @@ MALWARE_FAMILIES: dict[str, str] = {
     "stealc": "StealC — Information stealer sold as MaaS",
     "amadey": "Amadey — Loader botnet",
     "warzone": "WarzoneRAT — Commercial RAT (AVE_MARIA)",
+    "bazarloader": "BazarLoader — Loader/backdoor used for initial access",
+    "gootloader": "GootLoader — JavaScript-based loader and initial access malware",
+    "zloader": "ZLoader — Banking trojan and malware loader",
+    "ursnif": "Ursnif/Gozi — Banking trojan with credential theft features",
+    "danabot": "DanaBot — Modular banking trojan and loader",
+    "azorult": "AZORult — Credential and browser-data stealer",
+    "lokibot": "LokiBot — Information stealer targeting credentials and wallets",
+    "nanocore": "NanoCore — .NET remote access trojan",
+    "quasar": "QuasarRAT — Open-source .NET remote access trojan",
+    "darkcomet": "DarkComet — Remote access trojan",
+    "netwire": "NetWire — Commercial remote access trojan abused in intrusions",
+    "blackbasta": "Black Basta — Ransomware operation linked to double extortion",
+    "lockbit": "LockBit — Ransomware-as-a-service operation",
+    "clop": "Clop — Ransomware operation known for data-theft extortion",
+    "royal": "Royal — Human-operated ransomware family",
+    "conti": "Conti — Ransomware operation and intrusion playbook",
+    "cactus": "Cactus — Ransomware family using encryption and data theft",
+    "akira": "Akira — Ransomware operation targeting enterprise networks",
+    "alphv": "ALPHV/BlackCat — Rust-based ransomware-as-a-service",
+    "rhysida": "Rhysida — Ransomware family targeting public and private sectors",
+    "medusa": "Medusa — Ransomware operation using double extortion",
+    "zeus": "Zeus — Banking trojan and credential theft malware",
+    "mirai": "Mirai — IoT botnet malware",
+    "xmrig": "XMRig — Cryptocurrency miner frequently deployed by malware",
 }
+
+MALWARE_FAMILY_ALIASES: dict[str, str] = {
+    "agent_tesla": "agenttesla",
+    "ave_maria": "warzone",
+    "alphv_blackcat": "alphv",
+    "bazar_loader": "bazarloader",
+    "black_cat": "alphv",
+    "blackcat": "alphv",
+    "cobaltstrike": "cobalt_strike",
+    "cobalt_strike": "cobalt_strike",
+    "goot_loader": "gootloader",
+    "gozi": "ursnif",
+    "gozi_ursnif": "ursnif",
+    "lock_bit": "lockbit",
+    "lumma_stealer": "lumma",
+    "nano_core": "nanocore",
+    "pikabot": "pikabot",
+    "quasar_rat": "quasar",
+    "red_line": "redline",
+    "redline_stealer": "redline",
+    "smoke_loader": "smokeloader",
+    "stealc_stealer": "stealc",
+    "warzonerat": "warzone",
+    "xloader": "formbook",
+}
+
+
+def _normalise_malware_family_key(family_key: str) -> str:
+    """Normalise family names from feeds/APIs into stable lookup keys."""
+    return re.sub(r"[^a-z0-9]+", "_", family_key.strip().lower()).strip("_")
 
 # ======================================================================
 # Data classes
@@ -292,6 +350,8 @@ class ThreatIntelManager:
         self.cache_dir = cache_dir or CACHE_DIR
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.api_key = api_key or os.environ.get("ABUSE_CH_API_KEY")
+        self.otx_api_key = os.environ.get("OTX_API_KEY", "")
+        self.virustotal_api_key = os.environ.get("VIRUSTOTAL_API_KEY", "")
 
         # In-memory IOC sets (populated by update_feeds or load_cache)
         self.c2_ips: set[str] = set(STATIC_C2_IPS)
@@ -344,6 +404,44 @@ class ThreatIntelManager:
             self._feed_statuses[feed_name] = status
 
         return self._feed_statuses
+
+    def update_otx_pulses(self, api_key: Optional[str] = None, quiet: bool = False) -> FeedStatus:
+        """Import indicators from the authenticated user's AlienVault OTX pulses."""
+        key = api_key or self.otx_api_key
+        status = FeedStatus(
+            name="alienvault_otx_pulses",
+            description="AlienVault OTX — subscribed pulse indicators",
+            url="https://otx.alienvault.com/api/v1/pulses/subscribed",
+            cache_path=str(self.cache_dir / "alienvault_otx_pulses.json"),
+        )
+        if not key:
+            status.error = "OTX API key required"
+            self._feed_statuses[status.name] = status
+            return status
+
+        try:
+            if not quiet:
+                logger.info("Updating feed: %s", status.name)
+            data = self._request_json(
+                status.url,
+                headers={"X-OTX-API-KEY": key},
+            )
+            count = self.ingest_otx_pulses(data)
+            cache_path = self.cache_dir / "alienvault_otx_pulses.json"
+            cache_path.write_text(json.dumps(data), encoding="utf-8")
+            meta = {"updated": datetime.now(timezone.utc).isoformat(), "url": status.url}
+            cache_path.with_suffix(cache_path.suffix + ".meta").write_text(
+                json.dumps(meta), encoding="utf-8"
+            )
+            status.entry_count = count
+            status.last_updated = datetime.now(timezone.utc)
+        except Exception as exc:
+            status.error = str(exc)
+            if not quiet:
+                logger.warning("Failed to update %s: %s", status.name, exc)
+
+        self._feed_statuses[status.name] = status
+        return status
 
     def get_feed_status(self) -> dict[str, FeedStatus]:
         """Return status of all feeds."""
@@ -486,9 +584,124 @@ class ThreatIntelManager:
             logger.debug("MalwareBazaar lookup failed: %s", exc)
         return None
 
+    def lookup_otx_indicator(
+        self,
+        indicator: str,
+        api_key: Optional[str] = None,
+    ) -> Optional[IOCMatch]:
+        """Query AlienVault OTX for an IP, domain, or file-hash indicator."""
+        key = api_key or self.otx_api_key
+        if not key:
+            return None
+
+        indicator = indicator.strip()
+        kind = self._indicator_type(indicator)
+        if kind not in {"ip", "domain", "hash"}:
+            return None
+
+        otx_type = {
+            "ip": "IPv6" if ":" in indicator else "IPv4",
+            "domain": "domain",
+            "hash": "file",
+        }[kind]
+        url = (
+            "https://otx.alienvault.com/api/v1/indicators/"
+            f"{otx_type}/{quote(indicator, safe='')}/general"
+        )
+        try:
+            data = self._request_json(url, headers={"X-OTX-API-KEY": key})
+            pulse_info = data.get("pulse_info", {}) if isinstance(data, dict) else {}
+            pulses = pulse_info.get("pulses") or []
+            pulse_count = int(pulse_info.get("count") or len(pulses) or 0)
+            if pulse_count <= 0:
+                return None
+
+            families = self._extract_otx_family_names(pulses)
+            family = families[0] if families else None
+            pulse_names = [
+                str(p["name"])
+                for p in pulses[:3]
+                if isinstance(p, dict) and p.get("name")
+            ]
+            desc = f"AlienVault OTX: indicator appears in {pulse_count} pulse(s)"
+            if pulse_names:
+                desc += f" ({', '.join(pulse_names)})"
+            return IOCMatch(
+                indicator=indicator,
+                indicator_type=kind,
+                source="AlienVault OTX",
+                malware_family=family,
+                description=desc,
+                confidence="high" if pulse_count >= 3 else "medium",
+                first_seen=self._first_pulse_date(pulses),
+            )
+        except Exception as exc:
+            logger.debug("AlienVault OTX lookup failed: %s", exc)
+            return None
+
+    def lookup_virustotal_indicator(
+        self,
+        indicator: str,
+        api_key: Optional[str] = None,
+    ) -> Optional[IOCMatch]:
+        """Query VirusTotal for an IP, domain, or file-hash indicator."""
+        key = api_key or self.virustotal_api_key
+        if not key:
+            return None
+
+        indicator = indicator.strip()
+        kind = self._indicator_type(indicator)
+        vt_path = {
+            "ip": "ip_addresses",
+            "domain": "domains",
+            "hash": "files",
+        }.get(kind)
+        if not vt_path:
+            return None
+
+        url = f"https://www.virustotal.com/api/v3/{vt_path}/{quote(indicator, safe='')}"
+        try:
+            result = self._request_json(url, headers={"x-apikey": key})
+            attributes = (result.get("data") or {}).get("attributes") or {}
+            stats = attributes.get("last_analysis_stats") or {}
+            malicious = int(stats.get("malicious") or 0)
+            suspicious = int(stats.get("suspicious") or 0)
+            if malicious <= 0 and suspicious <= 0:
+                return None
+
+            family = self._extract_vt_threat_label(attributes)
+            return IOCMatch(
+                indicator=indicator,
+                indicator_type=kind,
+                source="VirusTotal",
+                malware_family=family,
+                description=(
+                    f"VirusTotal: {malicious} malicious and "
+                    f"{suspicious} suspicious engine detection(s)"
+                ),
+                confidence="high" if malicious >= 3 else "medium",
+                first_seen=self._format_epoch(attributes.get("first_submission_date")),
+            )
+        except Exception as exc:
+            logger.debug("VirusTotal lookup failed: %s", exc)
+            return None
+
     def get_malware_info(self, family_key: str) -> Optional[str]:
         """Get a human-readable description of a malware family."""
-        return MALWARE_FAMILIES.get(family_key.lower())
+        key = _normalise_malware_family_key(family_key)
+        compact_key = key.replace("_", "")
+
+        for candidate in (key, compact_key):
+            if candidate in MALWARE_FAMILIES:
+                return MALWARE_FAMILIES[candidate]
+
+        alias = (
+            MALWARE_FAMILY_ALIASES.get(key)
+            or MALWARE_FAMILY_ALIASES.get(compact_key)
+        )
+        if alias:
+            return MALWARE_FAMILIES.get(alias)
+        return None
 
     def get_suspicious_ports(self) -> set[int]:
         """Return the extended set of suspicious ports."""
@@ -501,6 +714,34 @@ class ThreatIntelManager:
     def get_masquerade_rules(self) -> list[dict]:
         """Return process masquerade detection rules."""
         return list(MASQUERADE_PATTERNS)
+
+    def ingest_otx_pulses(self, data: dict) -> int:
+        """Ingest indicators from an AlienVault OTX pulse-list response."""
+        count = 0
+        for pulse in data.get("results", []):
+            if not isinstance(pulse, dict):
+                continue
+            family = self._normalise_pulse_family(pulse)
+            for entry in pulse.get("indicators", []):
+                if not isinstance(entry, dict):
+                    continue
+                indicator = str(entry.get("indicator") or "").strip()
+                indicator_type = str(entry.get("type") or "").lower()
+                if not indicator:
+                    continue
+                if indicator_type in {"ipv4", "ipv6"}:
+                    self.c2_ips.add(indicator)
+                    count += 1
+                elif indicator_type in {"domain", "hostname"}:
+                    self.malicious_domains.add(indicator.lower())
+                    count += 1
+                elif indicator_type == "url":
+                    self.malicious_urls.add(indicator)
+                    count += 1
+                elif "filehash" in indicator_type or indicator_type in {"sha256", "md5", "sha1"}:
+                    self.malicious_hashes[indicator.lower()] = family or pulse.get("name", "AlienVault OTX")
+                    count += 1
+        return count
 
     # ------------------------------------------------------------------
     # Feed parsers
@@ -571,6 +812,15 @@ class ThreatIntelManager:
                 except Exception as exc:
                     logger.debug("Failed to load cache %s: %s", feed_name, exc)
 
+        otx_cache = self.cache_dir / "alienvault_otx_pulses.json"
+        if otx_cache.exists():
+            try:
+                data = json.loads(otx_cache.read_text(encoding="utf-8"))
+                self.ingest_otx_pulses(data)
+                logger.debug("Loaded cached feed: alienvault_otx_pulses")
+            except Exception as exc:
+                logger.debug("Failed to load cache alienvault_otx_pulses: %s", exc)
+
     def needs_update(self) -> bool:
         """Check if any feed cache is missing or stale."""
         for feed_cfg in FEEDS.values():
@@ -592,6 +842,92 @@ class ThreatIntelManager:
         req = Request(url, headers={"User-Agent": "NetWatch/1.0 (github.com/Ethanjoyce2010/NetWatch)"})
         with urlopen(req, timeout=timeout) as resp:
             return resp.read().decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _request_json(
+        url: str,
+        *,
+        headers: Optional[dict[str, str]] = None,
+        timeout: int = 30,
+    ) -> dict:
+        """Request a JSON API endpoint."""
+        request_headers = {
+            "Accept": "application/json",
+            "User-Agent": "NetWatch/1.0 (github.com/Ethanjoyce2010/NetWatch)",
+        }
+        if headers:
+            request_headers.update(headers)
+        req = Request(url, headers=request_headers)
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    @staticmethod
+    def _indicator_type(indicator: str) -> str:
+        """Classify a lookup indicator as ip, domain, hash, url, or unknown."""
+        value = indicator.strip()
+        try:
+            ipaddress.ip_address(value)
+            return "ip"
+        except ValueError:
+            pass
+
+        hash_value = value.lower()
+        if re.fullmatch(r"[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64}", hash_value):
+            return "hash"
+        if value.startswith(("http://", "https://")):
+            return "url"
+        if re.fullmatch(r"[a-z0-9][a-z0-9.-]*\.[a-z]{2,63}", value.lower()):
+            return "domain"
+        return "unknown"
+
+    @staticmethod
+    def _extract_otx_family_names(pulses: list) -> list[str]:
+        """Pull plausible malware family labels from OTX pulse metadata."""
+        names: list[str] = []
+        for pulse in pulses:
+            if not isinstance(pulse, dict):
+                continue
+            for tag in pulse.get("tags") or []:
+                key = _normalise_malware_family_key(str(tag))
+                if key in MALWARE_FAMILIES or key in MALWARE_FAMILY_ALIASES:
+                    names.append(str(tag))
+            name = str(pulse.get("name") or "")
+            for family in MALWARE_FAMILIES:
+                if family.replace("_", " ") in name.lower() or family in name.lower():
+                    names.append(family)
+        return list(dict.fromkeys(names))
+
+    @staticmethod
+    def _normalise_pulse_family(pulse: dict) -> Optional[str]:
+        families = ThreatIntelManager._extract_otx_family_names([pulse])
+        return families[0] if families else None
+
+    @staticmethod
+    def _first_pulse_date(pulses: list) -> Optional[str]:
+        dates = []
+        for pulse in pulses:
+            if isinstance(pulse, dict) and pulse.get("created"):
+                dates.append(str(pulse["created"]))
+        return sorted(dates)[0] if dates else None
+
+    @staticmethod
+    def _extract_vt_threat_label(attributes: dict) -> Optional[str]:
+        classification = attributes.get("popular_threat_classification") or {}
+        label = classification.get("suggested_threat_label")
+        if label:
+            return str(label)
+        names = classification.get("popular_threat_name") or []
+        if names and isinstance(names[0], dict):
+            value = names[0].get("value")
+            return str(value) if value else None
+        return None
+
+    @staticmethod
+    def _format_epoch(value) -> Optional[str]:
+        try:
+            return datetime.fromtimestamp(int(value), timezone.utc).isoformat()
+        except (TypeError, ValueError, OSError):
+            return None
 
     @staticmethod
     def _sha256_file(path: str) -> str:

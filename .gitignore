@@ -19,11 +19,15 @@ ENV/
 *.swp
 *.swo
 *~
+.codex/
+.claude/
 
 # OS junk
 Thumbs.db
 Desktop.ini
 .DS_Store
+.AppleDouble
+.LSOverride
 
 # Threat intel feed caches (re-downloaded at runtime)
 feodo_c2_ips.txt
@@ -37,6 +41,7 @@ urlhaus_hosts.txt.meta
 *.pdf
 netwatch_alerts_*.csv
 netwatch_connections_*.csv
+alerts*.json
 
 # Logs
 *.log

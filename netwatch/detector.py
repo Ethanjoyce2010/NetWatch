@@ -315,7 +315,7 @@ class AnomalyDetector:
         if key in self._fired:
             return []
         # Whitelist suppression
-        if self.whitelist.is_suppressed(rec.process_name, rule):
+        if self.whitelist.is_suppressed(rec.process_name, rule, details or {}):
             logger.debug("Suppressed by whitelist: %s → %s", rec.process_name, rule)
             return []
         self._fired.add(key)

@@ -11,6 +11,7 @@ A Python tool that monitors live network connections, detects suspicious behavio
 | **15 detection rules** | Suspicious ports, unexpected processes, high connection rates, IP/port scanning, Tor, DNS tunnelling, external listeners, C2 callbacks, **known C2 IPs, beaconing, process masquerading, DNS exfiltration, crypto mining, lateral movement** |
 | **Lateral movement detection** | Flags internal-to-internal connections on admin ports (SMB, RDP, WinRM, WMI, SSH, VNC) with severity escalation |
 | **Threat intelligence feeds** | Auto-downloads IOC feeds from abuse.ch (Feodo Tracker, SSLBL, URLhaus) — C2 IPs, malicious domains, malware URLs |
+| **Additional threat intel providers** | Optional AlienVault OTX pulse imports plus OTX and VirusTotal indicator lookups |
 | **MalwareBazaar integration** | Optional SHA256 hash lookups against MalwareBazaar API (free auth key) |
 | **DLL injection detection** | 8 heuristics including hash verification against threat intel |
 | **Authenticode verification** | Validates digital signatures of executables via WinVerifyTrust (Windows) |
@@ -20,20 +21,25 @@ A Python tool that monitors live network connections, detects suspicious behavio
 | **PDF report generator** | `--pdf report.pdf` creates a multi-page report with executive summary, network stats, alert tables, investigations, feed status, and a prioritised **Recommended Actions** section |
 | **HTML report generator** | `--html report.html` creates a self-contained interactive report with Chart.js charts, sortable tables, and dark mode |
 | **Network statistics** | `--stats` shows protocol breakdown, traffic direction, top remote IPs, top processes, connection states |
+| **Network map visualization** | `--network-map map.html` and `--live-map map.html` render process-to-IP relationship graphs |
 | **Top talkers** | `--top N` ranks the busiest processes by connection count |
 | **Process whitelist** | Suppress known-good alerts via `whitelist.json` (e.g. svchost.exe External Listener noise) |
+| **Learning mode** | `--learning-mode learned_whitelist.json` observes local activity and suggests low-risk whitelist entries |
 | **CSV export** | `--export-csv` / `--export-connections-csv` for spreadsheet or SIEM analysis |
 | **Smart listener filter** | Known Windows services auto-excluded from External Listener alerts |
 | **80+ known malware DLL names** | Extended definitions covering Cobalt Strike, Metasploit, Mimikatz, RATs, stealers, loaders, APT tools |
-| **30+ malware family database** | Built-in descriptions for Emotet, TrickBot, QakBot, Cobalt Strike, RedLine, Lumma, and more |
+| **50+ malware family database** | Built-in descriptions for Emotet, TrickBot, QakBot, Cobalt Strike, RedLine, Lumma, and more |
 | **Process masquerade detection** | Validates critical Windows processes run from expected directories |
 | **LOLBin detection** | Flags Living Off the Land Binaries making external connections |
 | **DGA domain detection** | Regex patterns to catch algorithmically generated domain names |
 | **Risk scoring** | Each process accumulates a 0-100 risk score based on triggered alerts |
 | **Deep investigation** | Drills into flagged processes - parent/child tree, open files, env vars, fileless-malware check |
+| **Confirmed kill switch** | `--kill-critical` prompts before terminating processes that trigger CRITICAL alerts |
+| **Executable quarantine** | `--quarantine-critical` prompts before moving suspicious executables to a quarantine folder |
+| **Scheduled task scan** | `--task-scan` flags persistence indicators in Windows Task Scheduler entries |
 | **JSON alerting** | Optionally writes structured alerts to a JSON file for SIEM ingestion |
 | **Coloured output** | Severity-coded terminal output for quick triage |
-| **71 unit tests** | Comprehensive test suite covering models, config, detector, whitelist, GeoIP, notifier, stats |
+| **109 unit tests** | Comprehensive test suite covering models, config, detector, whitelist, GeoIP, notifier, stats, reporting, CSV export, threat intel, learning, response actions, scheduler scanning, and network maps |
 | **Interactive batch menu** | Windows batch file UI with 18 menu options |
 
 ## Requirements
@@ -78,6 +84,10 @@ python -m netwatch --dll-scan --pdf dll_report.pdf
 # Generate an interactive HTML report
 python -m netwatch --snapshot --html report.html
 
+# Generate a process-to-remote-IP network map
+python -m netwatch --snapshot --network-map map.html
+python -m netwatch --duration 60 --live-map live_map.html
+
 # Use a TOML config file
 python -m netwatch --config netwatch.toml
 
@@ -110,6 +120,13 @@ python -m netwatch --feed-status
 # Look up a SHA256 hash in MalwareBazaar (requires free API key)
 python -m netwatch --hash-lookup <SHA256> --api-key <YOUR_KEY>
 
+# Look up indicators in AlienVault OTX or VirusTotal
+python -m netwatch --otx-lookup 203.0.113.10 --otx-api-key <YOUR_KEY>
+python -m netwatch --vt-lookup example.com --vt-api-key <YOUR_KEY>
+
+# Import subscribed AlienVault OTX pulse indicators into the local feed cache
+python -m netwatch --update-otx-pulses --otx-api-key <YOUR_KEY>
+
 # Verbose debug output
 python -m netwatch -v
 
@@ -124,6 +141,16 @@ python -m netwatch --snapshot --export-csv alerts.csv --export-connections-csv c
 
 # Use a custom whitelist file
 python -m netwatch --snapshot --whitelist my_whitelist.json
+
+# Learn low-risk whitelist suggestions for this environment
+python -m netwatch --learning-mode learned_whitelist.json --learn-duration 60
+
+# Prompt before terminating or quarantining processes with CRITICAL alerts
+python -m netwatch --snapshot --kill-critical
+python -m netwatch --snapshot --quarantine-critical quarantine/
+
+# Scan Windows scheduled tasks for persistence indicators
+python -m netwatch --task-scan
 
 # Full combo: snapshot + stats + PDF + HTML + CSV
 python -m netwatch --snapshot --stats --pdf report.pdf --html report.html --export-csv alerts.csv
@@ -158,12 +185,15 @@ NetWatch auto-downloads and caches IOC feeds from [abuse.ch](https://abuse.ch) (
 | **Feodo Tracker** | feodotracker.abuse.ch | Botnet C2 IPs (Emotet, TrickBot, QakBot, Dridex) |
 | **SSLBL** | sslbl.abuse.ch | SSL-based C2 IP blacklist |
 | **URLhaus** | urlhaus.abuse.ch | Active malware distribution URLs, IPs, domains |
+| **AlienVault OTX** | otx.alienvault.com | Optional subscribed pulse IPs, domains, URLs, and hashes |
+| **VirusTotal** | virustotal.com | Optional per-indicator IP, domain, and hash reputation lookups |
 
 Feeds are cached locally (~1 hour expiry) and loaded automatically on startup. Run `--update-feeds` to force a refresh.
 
 Note: the downloaded feed cache files and generated `*.pdf` reports are ignored by git (see `.gitignore`).
 
 For enhanced hash lookups, get a free API key at [auth.abuse.ch](https://auth.abuse.ch/) and use `--api-key` or set the `ABUSE_CH_API_KEY` environment variable.
+For OTX or VirusTotal lookups, use `--otx-api-key` / `OTX_API_KEY` or `--vt-api-key` / `VIRUSTOTAL_API_KEY`.
 
 ## Output Example
 
@@ -196,6 +226,10 @@ netwatch/
 ├── config.py          # TOML config loader (tomllib/tomli) with env var overrides
 ├── geoip.py           # GeoIPEnricher - MaxMind GeoLite2 country + ASN lookups
 ├── notifier.py        # Notifier - Discord, Slack, email alert dispatch
+├── learning.py        # LearningWhitelistBuilder - generate whitelist suggestions from observed alerts
+├── response.py        # ProcessResponder - confirmed kill-switch and quarantine actions
+├── scheduler.py       # TaskSchedulerScanner - Windows scheduled-task persistence heuristics
+├── network_map.py     # NetworkMapGenerator - process-to-endpoint HTML graph output
 ├── html_report.py     # HTMLReportGenerator - Chart.js interactive report
 ├── pdf_report.py      # PDFReportGenerator - multi-page report output
 ├── reporter.py        # Reporter - coloured console + JSON output
@@ -209,7 +243,14 @@ tests/
 ├── test_whitelist.py  # Whitelist suppression logic
 ├── test_geoip.py      # GeoIP enrichment (mocked DB)
 ├── test_notifier.py   # Notification filtering, cooldown, severity
-└── test_stats.py      # Network stats computation
+├── test_stats.py      # Network stats computation
+├── test_reporter.py   # Console reporting and JSON alert logs
+├── test_csv_export.py # Alert and connection CSV exports
+├── test_threat_intel.py # Malware family lookup coverage
+├── test_learning.py   # Learning-mode whitelist generation
+├── test_response.py   # Kill-switch and quarantine confirmation gates
+├── test_scheduler.py  # Scheduled-task persistence parsing
+└── test_network_map.py # Network map graph generation
 ```
 
 ## Notes
@@ -242,6 +283,8 @@ See the included `netwatch.toml` sample for all available settings.
 | `NETWATCH_NOTIFY_MIN_SEVERITY` | `notifications.min_severity` |
 | `NETWATCH_GEOIP_DB` | `geoip.db_path` |
 | `MAXMIND_LICENSE_KEY` | `geoip.license_key` |
+| `OTX_API_KEY` | AlienVault OTX provider API key |
+| `VIRUSTOTAL_API_KEY` | VirusTotal provider API key |
 
 ## Running Tests
 
@@ -250,11 +293,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
-## TODOS
-- [ ] Add unit tests for `reporter.py` and `csv_export.py`
-- [ ] Add more malware family descriptions to the built-in database
-- [ ] Implement a "learning mode" to auto-whitelist common processes and connections in a specific environment
-- [ ] Add support for additional threat intelligence feeds (AlienVault OTX, VirusTotal, etc.)
-- [ ] Implement a "kill switch" to automatically terminate processes that trigger critical alerts (with user confirmation)
-- [ ] Add a "quarantine" feature to move suspicious executables to a safe location
-- [ ] Add support to scan task scheduler entries for persistence mechanisms
+## Contributing
+
+See [Contributing.md](Contributing.md) for contribution guidelines, bug report
+details, feature request guidance, and pull request expectations.

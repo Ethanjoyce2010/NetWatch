@@ -22,7 +22,6 @@ from .detector import AnomalyDetector
 from .dll_inspector import DLLInspector
 from .investigator import ProcessInvestigator
 from .monitor import TrafficMonitor
-from .pdf_report import PDFReportGenerator
 from .html_report import HTMLReportGenerator
 from .reporter import Reporter
 from .threat_intel import ThreatIntelManager
@@ -32,6 +31,10 @@ from .csv_export import export_alerts_csv, export_connections_csv
 from .config import load_config
 from .geoip import GeoIPEnricher
 from .notifier import Notifier
+from .learning import LearningWhitelistBuilder
+from .response import ProcessResponder
+from .scheduler import TaskSchedulerScanner
+from .network_map import NetworkMapGenerator
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -114,6 +117,39 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Look up a SHA256 hash in MalwareBazaar (requires --api-key)",
     )
     p.add_argument(
+        "--otx-api-key",
+        type=str,
+        default=None,
+        metavar="KEY",
+        help="AlienVault OTX API key for pulse import or indicator lookup",
+    )
+    p.add_argument(
+        "--otx-lookup",
+        type=str,
+        default=None,
+        metavar="INDICATOR",
+        help="Look up an IP, domain, or hash in AlienVault OTX",
+    )
+    p.add_argument(
+        "--update-otx-pulses",
+        action="store_true",
+        help="Import indicators from subscribed AlienVault OTX pulses",
+    )
+    p.add_argument(
+        "--vt-api-key",
+        type=str,
+        default=None,
+        metavar="KEY",
+        help="VirusTotal API key for indicator lookups",
+    )
+    p.add_argument(
+        "--vt-lookup",
+        type=str,
+        default=None,
+        metavar="INDICATOR",
+        help="Look up an IP, domain, or hash in VirusTotal",
+    )
+    p.add_argument(
         "--pdf",
         type=str,
         default=None,
@@ -140,6 +176,27 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help="Generate an HTML report (combine with --snapshot or --dll-scan)",
+    )
+    p.add_argument(
+        "--network-map",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Generate an HTML process-to-endpoint network map",
+    )
+    p.add_argument(
+        "--live-map",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Update an auto-refreshing HTML network map during live monitoring",
+    )
+    p.add_argument(
+        "--map-refresh",
+        type=int,
+        default=3,
+        metavar="SECONDS",
+        help="Browser refresh interval for --live-map output (default: 3)",
     )
     p.add_argument(
         "--config",
@@ -198,6 +255,46 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a whitelist.json for suppressing known-good alerts",
     )
     p.add_argument(
+        "--learning-mode",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Observe normal activity and write learned whitelist suggestions to FILE",
+    )
+    p.add_argument(
+        "--learn-duration",
+        type=int,
+        default=30,
+        metavar="SECONDS",
+        help="Seconds to observe when using --learning-mode (default: 30)",
+    )
+    p.add_argument(
+        "--learn-min-count",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Minimum repeated alert count before learning a whitelist entry",
+    )
+    p.add_argument(
+        "--kill-critical",
+        action="store_true",
+        help="Prompt to terminate processes that trigger CRITICAL alerts",
+    )
+    p.add_argument(
+        "--quarantine-critical",
+        type=str,
+        default=None,
+        nargs="?",
+        const="",
+        metavar="DIR",
+        help="Prompt to move executables for CRITICAL alerts into quarantine",
+    )
+    p.add_argument(
+        "--task-scan",
+        action="store_true",
+        help="Scan Windows scheduled tasks for persistence indicators and exit",
+    )
+    p.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -216,6 +313,22 @@ BANNER = r"""
   Network Traffic Anomaly Detector  v3.0.0
   Threat Intelligence Enhanced | GeoIP | Notifications
 """
+
+
+def _print_ioc_match(match) -> None:
+    """Print an IOC provider match in a consistent CLI format."""
+    if not match:
+        print("  Indicator not found or no malicious reputation reported.\n")
+        return
+    print(f"  [MATCH] {match.description or match.source}")
+    print(f"  Source: {match.source}")
+    print(f"  Type: {match.indicator_type}")
+    print(f"  Confidence: {match.confidence}")
+    if match.malware_family:
+        print(f"  Family/label: {match.malware_family}")
+    if match.first_seen:
+        print(f"  First seen: {match.first_seen}")
+    print()
 
 
 def main() -> None:
@@ -355,6 +468,86 @@ def main() -> None:
         print()
         return
 
+    if args.update_otx_pulses:
+        if not args.otx_api_key and not threat_intel.otx_api_key:
+            print("  Error: --update-otx-pulses requires --otx-api-key or OTX_API_KEY env var.\n")
+            return
+        print("  Updating AlienVault OTX subscribed pulses...\n")
+        status = threat_intel.update_otx_pulses(api_key=args.otx_api_key)
+        if status.error:
+            print(f"  [FAIL] {status.description}")
+            print(f"         Error: {status.error}")
+        else:
+            print(f"  [OK]   {status.description}")
+            print(f"         {status.entry_count} indicators loaded")
+        print()
+        return
+
+    if args.otx_lookup:
+        if not args.otx_api_key and not threat_intel.otx_api_key:
+            print("  Error: --otx-lookup requires --otx-api-key or OTX_API_KEY env var.\n")
+            return
+        print(f"  Looking up OTX indicator: {args.otx_lookup}\n")
+        match = threat_intel.lookup_otx_indicator(args.otx_lookup, api_key=args.otx_api_key)
+        _print_ioc_match(match)
+        return
+
+    if args.vt_lookup:
+        if not args.vt_api_key and not threat_intel.virustotal_api_key:
+            print("  Error: --vt-lookup requires --vt-api-key or VIRUSTOTAL_API_KEY env var.\n")
+            return
+        print(f"  Looking up VirusTotal indicator: {args.vt_lookup}\n")
+        match = threat_intel.lookup_virustotal_indicator(args.vt_lookup, api_key=args.vt_api_key)
+        _print_ioc_match(match)
+        return
+
+    if args.task_scan:
+        print("  Scanning scheduled tasks for persistence indicators...\n")
+        scanner = TaskSchedulerScanner()
+        findings = scanner.scan()
+        Reporter().print_task_scan(findings)
+        return
+
+    if args.learning_mode:
+        monitor = TrafficMonitor(poll_interval=cfg.monitor.poll_interval)
+        detector = AnomalyDetector(
+            threat_intel=threat_intel,
+            whitelist=whitelist,
+            connection_rate_threshold=cfg.detector.connection_rate_threshold,
+            rate_window_seconds=cfg.detector.rate_window_seconds,
+            min_unique_ips_for_scan_alert=cfg.detector.min_unique_ips_for_scan_alert,
+            port_scan_unique_ports=cfg.detector.port_scan_unique_ports,
+        )
+
+        duration = max(0, args.learn_duration)
+        all_alerts = []
+        print(
+            f"  Learning mode: observing for "
+            f"{duration}s and writing suggestions to {args.learning_mode}\n"
+        )
+        end_time = time.time() + duration
+        while True:
+            records = monitor.snapshot()
+            for rec in records:
+                geoip.enrich_record(rec)
+            all_alerts.extend(detector.analyse(records))
+            if duration == 0 or time.time() >= end_time:
+                break
+            time.sleep(cfg.monitor.poll_interval)
+
+        learner = LearningWhitelistBuilder()
+        learned = learner.build(all_alerts, min_occurrences=args.learn_min_count)
+        path = learner.write(
+            all_alerts,
+            args.learning_mode,
+            min_occurrences=args.learn_min_count,
+        )
+        print(
+            f"  [LEARN] Wrote {learner.count_entries(learned)} process "
+            f"whitelist entry group(s): {path}\n"
+        )
+        return
+
     # ---- Auto-load feeds silently (if cached) ----
     if threat_intel.needs_update():
         print("  [i] Downloading threat intel feeds (first run)...\n")
@@ -372,6 +565,7 @@ def main() -> None:
         pdf_path = cfg.reporting.pdf_output or args.pdf
         if not pdf_path:
             return
+        from .pdf_report import PDFReportGenerator
         gen = PDFReportGenerator()
         path = gen.generate(
             pdf_path,
@@ -454,6 +648,21 @@ def main() -> None:
     )
     reporter = Reporter(log_file=args.log)
     investigator = ProcessInvestigator()
+    responder = ProcessResponder(quarantine_dir=args.quarantine_critical or None)
+    map_generator = NetworkMapGenerator()
+    session_alerts = []
+    last_records = []
+
+    def _maybe_respond_to_critical(alerts):
+        results = []
+        if args.kill_critical:
+            results.extend(responder.terminate_critical(alerts))
+        if args.quarantine_critical is not None:
+            results.extend(
+                responder.quarantine_critical(alerts, detector.profiles)
+            )
+        if results:
+            reporter.print_response_results(results)
 
     start_time = time.time()
     total_alerts = 0
@@ -480,9 +689,11 @@ def main() -> None:
             geoip.enrich_record(rec)
 
         alerts = detector.analyse(records)
+        session_alerts.extend(alerts)
         total_alerts += len(alerts)
         reporter.report_alerts(alerts)
         notifier.send(alerts)
+        _maybe_respond_to_critical(alerts)
         risky = detector.get_risky_profiles(cfg.detector.min_risk_score)
         reporter.print_summary(risky)
 
@@ -536,6 +747,16 @@ def main() -> None:
             csv_path = export_connections_csv(records, args.export_connections_csv)
             print(f"  [CSV] Connections exported: {csv_path}\n")
 
+        map_path = args.network_map or args.live_map
+        if map_path:
+            saved_map = map_generator.generate(
+                map_path,
+                records,
+                alerts=alerts,
+                refresh_seconds=args.map_refresh if args.live_map else None,
+            )
+            print(f"  [MAP] Network map saved: {saved_map}\n")
+
         # Compute stats for PDF (always computed, cheap)
         from .stats import stats_to_dict
         snap_stats = compute_stats(records, list(detector.profiles.values()))
@@ -569,23 +790,34 @@ def main() -> None:
         for records in monitor.stream():
             if not running:
                 break
+            last_records = records
 
             # Enrich records with GeoIP data
             for rec in records:
                 geoip.enrich_record(rec)
 
             alerts = detector.analyse(records)
+            session_alerts.extend(alerts)
             total_alerts += len(alerts)
 
             if alerts:
                 print()  # newline before alerts
                 reporter.report_alerts(alerts)
                 notifier.send(alerts)
+                _maybe_respond_to_critical(alerts)
 
             elapsed = time.time() - start_time
             reporter.print_status(
                 len(records), len(detector.profiles), total_alerts, elapsed
             )
+
+            if args.live_map:
+                map_generator.generate(
+                    args.live_map,
+                    records,
+                    alerts=session_alerts,
+                    refresh_seconds=args.map_refresh,
+                )
 
             if args.duration and elapsed >= args.duration:
                 running = False
@@ -612,6 +844,14 @@ def main() -> None:
     if args.export_csv:
         csv_path = export_alerts_csv(all_alerts, args.export_csv)
         print(f"  [CSV] Alerts exported: {csv_path}\n")
+
+    if args.network_map and last_records:
+        saved_map = map_generator.generate(
+            args.network_map,
+            last_records,
+            alerts=session_alerts or all_alerts,
+        )
+        print(f"  [MAP] Network map saved: {saved_map}\n")
 
     _maybe_pdf(
         alerts=all_alerts,

@@ -57,3 +57,40 @@ class TestProcessWhitelist:
         wl = ProcessWhitelist(path=str(f))
         s = wl.summary()
         assert "2" in s  # 2 processes
+
+    def test_ignores_metadata_keys(self, tmp_path):
+        f = tmp_path / "whitelist.json"
+        f.write_text(json.dumps({
+            "_comment": "metadata, not a process",
+            "a.exe": ["R1"],
+        }), encoding="utf-8")
+
+        wl = ProcessWhitelist(path=str(f))
+
+        assert wl.entry_count == 1
+        assert wl.is_suppressed("_comment", "metadata, not a process") is False
+
+    def test_detail_rule_matches_alert_details(self, tmp_path):
+        f = tmp_path / "whitelist.json"
+        f.write_text(json.dumps({
+            "browser.exe": [
+                {
+                    "rule": "External High-Port Connection",
+                    "remote_addr": "203.0.113.10",
+                    "remote_port": 55000,
+                }
+            ],
+        }), encoding="utf-8")
+
+        wl = ProcessWhitelist(path=str(f))
+
+        assert wl.is_suppressed(
+            "browser.exe",
+            "External High-Port Connection",
+            {"remote_addr": "203.0.113.10", "remote_port": 55000},
+        ) is True
+        assert wl.is_suppressed(
+            "browser.exe",
+            "External High-Port Connection",
+            {"remote_addr": "203.0.113.11", "remote_port": 55000},
+        ) is False

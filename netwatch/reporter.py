@@ -163,6 +163,49 @@ class Reporter:
         print(f"\n{'=' * 80}\n")
 
     # ------------------------------------------------------------------
+    # Scheduled task scan report
+    # ------------------------------------------------------------------
+
+    def print_task_scan(self, findings: list) -> None:
+        """Print scheduled-task persistence findings."""
+        if not findings:
+            print(f"  {_DIM}No suspicious scheduled task entries detected.{_RESET}\n")
+            return
+
+        print(f"\n{'=' * 80}")
+        print(f"{_BOLD}  SCHEDULED TASK PERSISTENCE SCAN — {len(findings)} finding(s){_RESET}")
+        print(f"{'=' * 80}")
+        for finding in findings:
+            color = _severity_color(finding.severity)
+            print(
+                f"\n  {color}{_BOLD}[{finding.severity.value}] "
+                f"{finding.task_name or 'Unnamed task'}{_RESET}"
+            )
+            if finding.author:
+                print(f"     Author : {finding.author}")
+            if finding.status:
+                print(f"     Status : {finding.status}")
+            print(f"     Command: {finding.command}")
+            for reason in finding.reasons:
+                print(f"       - {reason}")
+        print(f"\n{'=' * 80}\n")
+
+    # ------------------------------------------------------------------
+    # Response action report
+    # ------------------------------------------------------------------
+
+    def print_response_results(self, results: list) -> None:
+        """Print kill-switch / quarantine action results."""
+        for result in results:
+            status = "OK" if result.success else "SKIP/FAIL"
+            print(
+                f"  [{status}] {result.action}: PID {result.pid} "
+                f"({result.process_name}) — {result.message}"
+            )
+            if result.destination:
+                print(f"       Destination: {result.destination}")
+
+    # ------------------------------------------------------------------
     # Deep investigation report
     # ------------------------------------------------------------------
 
