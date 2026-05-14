@@ -65,7 +65,7 @@ echo     [W]  HTML Report              - snapshot + generate interactive HTML re
 echo     [T]  Top Talkers + Stats      - top processes and network stats
 echo     [C]  CSV Export               - export snapshot to CSV files
 echo     [N]  Notify Test              - test notification channels
-echo     [G]  Full Report Bundle       - PDF + HTML + CSV in one go
+echo     [G]  Full Report Bundle       - PDF + HTML + CSV + map + task scan
 echo     [M]  Network Map              - snapshot + process/IP HTML map
 echo     [L]  Live Network Map         - auto-refreshing live process/IP map
 echo     [A]  Learning Mode            - generate whitelist suggestions
@@ -358,16 +358,18 @@ set "TS=%date:~-4%%date:~4,2%%date:~7,2%_%time:~0,2%%time:~3,2%%time:~6,2%"
 set "TS=%TS: =0%"
 set "PDFFILE=%SCRIPT_DIR%NetWatch_Report_%TS%.pdf"
 set "HTMLFILE=%SCRIPT_DIR%NetWatch_Report_%TS%.html"
+set "MAPFILE=%SCRIPT_DIR%NetWatch_Map_%TS%.html"
 set "CSVFILE=%SCRIPT_DIR%netwatch_alerts_%TS%.csv"
 set "CSVCONN=%SCRIPT_DIR%netwatch_connections_%TS%.csv"
 echo.
-echo   Generating full report bundle (PDF + HTML + CSV)...
+echo   Generating full report bundle (PDF + HTML + CSV + map + task scan)...
 echo.
-"%PYTHON%" -m netwatch --snapshot --pdf "%PDFFILE%" --html "%HTMLFILE%" --export-csv "%CSVFILE%" --export-connections-csv "%CSVCONN%" --stats
+"%PYTHON%" -m netwatch --snapshot --pdf "%PDFFILE%" --html "%HTMLFILE%" --network-map "%MAPFILE%" --task-scan --export-csv "%CSVFILE%" --export-connections-csv "%CSVCONN%" --stats
 echo.
 echo   Reports saved:
 echo     PDF:  %PDFFILE%
 echo     HTML: %HTMLFILE%
+echo     MAP:  %MAPFILE%
 echo     CSV:  %CSVFILE%
 echo     CSV:  %CSVCONN%
 echo.

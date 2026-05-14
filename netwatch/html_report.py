@@ -59,6 +59,9 @@ class HTMLReportGenerator:
         scan_duration: Optional[float] = None,
         connection_count: int = 0,
         network_stats: Optional[dict] = None,
+        task_findings: Optional[list] = None,
+        response_results: Optional[list] = None,
+        network_map_path: Optional[str] = None,
     ) -> str:
         """Build and save an HTML report. Returns the output file path."""
         alerts = alerts or []
@@ -80,8 +83,17 @@ class HTMLReportGenerator:
         if network_stats:
             parts.append(self._network_stats_section(network_stats))
 
+        if network_map_path:
+            parts.append(self._network_map_section(network_map_path))
+
         if alerts:
             parts.append(self._alerts_section(alerts))
+
+        if task_findings:
+            parts.append(self._task_findings_section(task_findings))
+
+        if response_results:
+            parts.append(self._response_results_section(response_results))
 
         if profiles:
             parts.append(self._process_section(profiles))
@@ -417,6 +429,81 @@ details[open] summary { border-radius: 6px 6px 0 0; }
   {top_ips_html}
   {top_procs_html}
   {top_ports_html}
+</div>
+"""
+
+    # ==================================================================
+    # Network Map
+    # ==================================================================
+
+    @staticmethod
+    def _network_map_section(network_map_path: str) -> str:
+        return f"""
+<div class="section">
+  <h2>Network Map</h2>
+  <div class="card">
+    <p>Process-to-endpoint graph generated alongside this report:</p>
+    <p><a href="{_esc(network_map_path)}">{_esc(network_map_path)}</a></p>
+  </div>
+</div>
+"""
+
+    # ==================================================================
+    # Scheduled Task Findings
+    # ==================================================================
+
+    def _task_findings_section(self, findings: list) -> str:
+        rows = []
+        for finding in findings:
+            color = _COLOURS.get(finding.severity, "#95a5a6")
+            reasons = "; ".join(finding.reasons)
+            rows.append(
+                f"<tr>"
+                f"<td><span class='sev-badge' style='background:{color}'>{finding.severity.value}</span></td>"
+                f"<td>{_esc(finding.task_name)}</td>"
+                f"<td>{_esc(finding.status)}</td>"
+                f"<td>{_esc(finding.command)}</td>"
+                f"<td>{_esc(reasons)}</td>"
+                f"</tr>"
+            )
+
+        return f"""
+<div class="section">
+  <h2>Scheduled Task Findings ({len(findings)})</h2>
+  <table>
+    <tr><th>Severity</th><th>Task</th><th>Status</th><th>Command</th><th>Reasons</th></tr>
+    {"".join(rows)}
+  </table>
+</div>
+"""
+
+    # ==================================================================
+    # Response Actions
+    # ==================================================================
+
+    def _response_results_section(self, results: list) -> str:
+        rows = []
+        for result in results:
+            status = "OK" if result.success else "SKIP/FAIL"
+            destination = result.destination or ""
+            rows.append(
+                f"<tr>"
+                f"<td>{_esc(status)}</td>"
+                f"<td>{_esc(result.action)}</td>"
+                f"<td>{result.pid}</td>"
+                f"<td>{_esc(result.process_name)}</td>"
+                f"<td>{_esc(result.message)}</td>"
+                f"<td>{_esc(destination)}</td>"
+                f"</tr>"
+            )
+
+        return f"""
+<div class="section">
+  <h2>Response Actions ({len(results)})</h2>
+  <table>
+    <tr><th>Status</th><th>Action</th><th>PID</th><th>Process</th><th>Message</th><th>Destination</th></tr>
+    {"".join(rows)}
+  </table>
 </div>
 """
 

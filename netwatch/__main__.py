@@ -501,11 +501,13 @@ def main() -> None:
         _print_ioc_match(match)
         return
 
-    if args.task_scan:
+    if args.task_scan and not args.snapshot and not args.duration and not args.network_map and not args.live_map:
         print("  Scanning scheduled tasks for persistence indicators...\n")
         scanner = TaskSchedulerScanner()
         findings = scanner.scan()
         Reporter().print_task_scan(findings)
+        _maybe_pdf(task_findings=findings)
+        _maybe_html(task_findings=findings)
         return
 
     if args.learning_mode:
@@ -561,6 +563,9 @@ def main() -> None:
         alerts=None, profiles=None, investigations=None,
         dll_results=None, duration=None, connections=0,
         network_stats=None,
+        task_findings=None,
+        response_results=None,
+        network_map_path=None,
     ):
         pdf_path = cfg.reporting.pdf_output or args.pdf
         if not pdf_path:
@@ -577,6 +582,9 @@ def main() -> None:
             scan_duration=duration,
             connection_count=connections,
             network_stats=network_stats,
+            task_findings=task_findings,
+            response_results=response_results,
+            network_map_path=network_map_path,
         )
         print(f"\n  [PDF] Report saved: {path}\n")
 
@@ -585,6 +593,9 @@ def main() -> None:
         alerts=None, profiles=None, investigations=None,
         dll_results=None, duration=None, connections=0,
         network_stats=None,
+        task_findings=None,
+        response_results=None,
+        network_map_path=None,
     ):
         html_path = cfg.reporting.html_output or args.html
         if not html_path:
@@ -600,6 +611,9 @@ def main() -> None:
             scan_duration=duration,
             connection_count=connections,
             network_stats=network_stats,
+            task_findings=task_findings,
+            response_results=response_results,
+            network_map_path=network_map_path,
         )
         print(f"\n  [HTML] Report saved: {path}\n")
 
@@ -652,6 +666,8 @@ def main() -> None:
     map_generator = NetworkMapGenerator()
     session_alerts = []
     last_records = []
+    response_results = []
+    task_findings = []
 
     def _maybe_respond_to_critical(alerts):
         results = []
@@ -663,6 +679,7 @@ def main() -> None:
             )
         if results:
             reporter.print_response_results(results)
+        return results
 
     start_time = time.time()
     total_alerts = 0
@@ -693,7 +710,7 @@ def main() -> None:
         total_alerts += len(alerts)
         reporter.report_alerts(alerts)
         notifier.send(alerts)
-        _maybe_respond_to_critical(alerts)
+        response_results.extend(_maybe_respond_to_critical(alerts))
         risky = detector.get_risky_profiles(cfg.detector.min_risk_score)
         reporter.print_summary(risky)
 
@@ -747,6 +764,7 @@ def main() -> None:
             csv_path = export_connections_csv(records, args.export_connections_csv)
             print(f"  [CSV] Connections exported: {csv_path}\n")
 
+        saved_map = None
         map_path = args.network_map or args.live_map
         if map_path:
             saved_map = map_generator.generate(
@@ -756,6 +774,11 @@ def main() -> None:
                 refresh_seconds=args.map_refresh if args.live_map else None,
             )
             print(f"  [MAP] Network map saved: {saved_map}\n")
+
+        if args.task_scan:
+            print("  Scanning scheduled tasks for persistence indicators...\n")
+            task_findings = TaskSchedulerScanner().scan()
+            reporter.print_task_scan(task_findings)
 
         # Compute stats for PDF (always computed, cheap)
         from .stats import stats_to_dict
@@ -770,6 +793,9 @@ def main() -> None:
             duration=elapsed,
             connections=len(records),
             network_stats=snap_stats_dict,
+            task_findings=task_findings,
+            response_results=response_results,
+            network_map_path=saved_map,
         )
         _maybe_html(
             alerts=alerts,
@@ -779,6 +805,9 @@ def main() -> None:
             duration=elapsed,
             connections=len(records),
             network_stats=snap_stats_dict,
+            task_findings=task_findings,
+            response_results=response_results,
+            network_map_path=saved_map,
         )
         reporter.close()
         return
@@ -804,7 +833,7 @@ def main() -> None:
                 print()  # newline before alerts
                 reporter.report_alerts(alerts)
                 notifier.send(alerts)
-                _maybe_respond_to_critical(alerts)
+                response_results.extend(_maybe_respond_to_critical(alerts))
 
             elapsed = time.time() - start_time
             reporter.print_status(
@@ -852,6 +881,15 @@ def main() -> None:
             alerts=session_alerts or all_alerts,
         )
         print(f"  [MAP] Network map saved: {saved_map}\n")
+    elif args.live_map and last_records:
+        saved_map = args.live_map
+    else:
+        saved_map = None
+
+    if args.task_scan:
+        print("  Scanning scheduled tasks for persistence indicators...\n")
+        task_findings = TaskSchedulerScanner().scan()
+        reporter.print_task_scan(task_findings)
 
     _maybe_pdf(
         alerts=all_alerts,
@@ -859,6 +897,9 @@ def main() -> None:
         investigations=investigations or None,
         duration=elapsed,
         connections=total_alerts,  # approximate
+        task_findings=task_findings,
+        response_results=response_results,
+        network_map_path=saved_map,
     )
     _maybe_html(
         alerts=all_alerts,
@@ -866,6 +907,9 @@ def main() -> None:
         investigations=investigations or None,
         duration=elapsed,
         connections=total_alerts,  # approximate
+        task_findings=task_findings,
+        response_results=response_results,
+        network_map_path=saved_map,
     )
     reporter.close()
     print(f"  Done. {total_alerts} alert(s) raised during session.\n")

@@ -8,6 +8,9 @@ Generates a multi-page PDF containing:
   - Deep investigation findings
   - DLL injection scan results
   - Threat intelligence feed status
+  - Scheduled task persistence findings
+  - Confirmed response action results
+  - Network map output reference
 """
 
 from __future__ import annotations
@@ -126,6 +129,9 @@ class PDFReportGenerator:
         scan_duration: Optional[float] = None,
         connection_count: int = 0,
         network_stats: Optional[dict] = None,
+        task_findings: Optional[list] = None,
+        response_results: Optional[list] = None,
+        network_map_path: Optional[str] = None,
     ) -> str:
         """Build and save a PDF report. Returns the output file path."""
         alerts = alerts or []
@@ -145,9 +151,20 @@ class PDFReportGenerator:
         if network_stats:
             self._network_stats_section(pdf, network_stats)
 
+        if network_map_path:
+            self._network_map_section(pdf, network_map_path)
+
         # ---- Alerts table ----
         if alerts:
             self._alerts_section(pdf, alerts)
+
+        # ---- Scheduled task findings ----
+        if task_findings:
+            self._task_findings_section(pdf, task_findings)
+
+        # ---- Response action results ----
+        if response_results:
+            self._response_results_section(pdf, response_results)
 
         # ---- Risk-scored processes ----
         if profiles:
@@ -353,6 +370,80 @@ class PDFReportGenerator:
                 pdf.cell(30, 5, f"{count} connections", border=0, ln=True)
 
         pdf.ln(4)
+
+    # ==================================================================
+    # Network map reference
+    # ==================================================================
+
+    def _network_map_section(self, pdf: _NetWatchPDF, network_map_path: str):
+        self._section_heading(pdf, "Network Map")
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(
+            0, 5,
+            "A process-to-endpoint network map was generated alongside this report.",
+        )
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(0, 6, _safe(network_map_path), ln=True)
+
+    # ==================================================================
+    # Scheduled task findings
+    # ==================================================================
+
+    def _task_findings_section(self, pdf: _NetWatchPDF, findings: list):
+        self._section_heading(pdf, "Scheduled Task Persistence Findings")
+
+        col_widths = [22, 45, 38, 85]
+        self._table_header(pdf, ["Severity", "Task", "Status", "Reasons"], col_widths)
+
+        pdf.set_font("Helvetica", "", 8)
+        for finding in findings:
+            if pdf.get_y() > 265:
+                pdf.add_page()
+                self._table_header(pdf, ["Severity", "Task", "Status", "Reasons"], col_widths)
+
+            colour = _COLOURS.get(finding.severity, _DARK)
+            pdf.set_fill_color(*colour)
+            pdf.set_text_color(*_WHITE)
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.cell(col_widths[0], 6, f" {finding.severity.value}", border=1, fill=True)
+            pdf.set_text_color(*_DARK)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.cell(col_widths[1], 6, f" {finding.task_name[:24]}", border=1)
+            pdf.cell(col_widths[2], 6, f" {finding.status[:18]}", border=1)
+            reasons = "; ".join(finding.reasons)
+            pdf.cell(col_widths[3], 6, f" {reasons[:55]}", border=1)
+            pdf.ln()
+
+            pdf.set_font("Helvetica", "I", 7)
+            pdf.multi_cell(0, 4, f"  Command: {finding.command[:150]}")
+            pdf.set_font("Helvetica", "", 8)
+
+    # ==================================================================
+    # Response action results
+    # ==================================================================
+
+    def _response_results_section(self, pdf: _NetWatchPDF, results: list):
+        self._section_heading(pdf, "Response Actions")
+
+        col_widths = [22, 28, 20, 45, 75]
+        self._table_header(pdf, ["Status", "Action", "PID", "Process", "Message"], col_widths)
+
+        pdf.set_font("Helvetica", "", 8)
+        for result in results:
+            if pdf.get_y() > 270:
+                pdf.add_page()
+                self._table_header(pdf, ["Status", "Action", "PID", "Process", "Message"], col_widths)
+            status = "OK" if result.success else "SKIP/FAIL"
+            pdf.cell(col_widths[0], 6, f" {status}", border=1)
+            pdf.cell(col_widths[1], 6, f" {result.action}", border=1)
+            pdf.cell(col_widths[2], 6, f" {result.pid}", border=1)
+            pdf.cell(col_widths[3], 6, f" {result.process_name[:22]}", border=1)
+            pdf.cell(col_widths[4], 6, f" {result.message[:42]}", border=1)
+            pdf.ln()
+            if result.destination:
+                pdf.set_font("Helvetica", "I", 7)
+                pdf.multi_cell(0, 4, f"  Destination: {result.destination}")
+                pdf.set_font("Helvetica", "", 8)
 
     # ==================================================================
     # Alerts table
